@@ -8,6 +8,7 @@ import type {
   ProviderQuota,
   QuotaAxiResponse,
   QuotaWindow,
+  StaticProviderId,
 } from "./types.js";
 
 /**
@@ -92,7 +93,7 @@ type StyleSpec = {
   bold?: boolean;
 };
 
-const ACCENTS: Record<ProviderId, StyleSpec> = {
+const ACCENTS: Record<StaticProviderId, StyleSpec> = {
   claude: { rgb: [250, 179, 135], ansi16: "93", bold: true },
   codex: { rgb: [148, 226, 213], ansi16: "96", bold: true },
   cursor: { rgb: [137, 180, 250], ansi16: "94", bold: true },
@@ -1327,7 +1328,8 @@ function renderLine(line: Line, depth: TuiColorDepth): string {
 
 function styleSgr(style: StyleName, depth: TuiColorDepth): string {
   const spec = style.startsWith("accent:")
-    ? ACCENTS[style.slice("accent:".length) as ProviderId]
+    ? (ACCENTS[style.slice("accent:".length) as StaticProviderId] ??
+      STYLES.label)
     : STYLES[style as Exclude<StyleName, `accent:${ProviderId}`>];
   const codes: string[] = [];
   if (spec.bold) codes.push("1");

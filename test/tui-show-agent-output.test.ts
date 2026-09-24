@@ -188,7 +188,7 @@ describe("--tui direction preference and agent output", () => {
   it("keeps the default --tui view for a value it does not recognize", () => {
     const cli = builtCli();
     const remaining = cli.run(["--tui", "--once"]);
-    for (const config of ['{"tui":{"show":"Used"}}', "not json"]) {
+    for (const config of ['{"tui":{"show":"Used"}}', '{"tui":"used"}']) {
       expect(cli.run(["--tui", "--once"], config), config).toEqual(remaining);
     }
   }, 30_000);

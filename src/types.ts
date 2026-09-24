@@ -1,4 +1,4 @@
-export type ProviderId =
+export type StaticProviderId =
   | "claude"
   | "codex"
   | "cursor"
@@ -16,6 +16,10 @@ export type ProviderId =
   | "openrouter"
   | "elevenlabs"
   | "devin";
+
+export type CustomProviderId = `custom:${string}`;
+
+export type ProviderId = StaticProviderId | CustomProviderId;
 
 export const PROVIDER_IDS = [
   "claude",
@@ -35,7 +39,7 @@ export const PROVIDER_IDS = [
   "openrouter",
   "elevenlabs",
   "devin",
-] as const satisfies readonly ProviderId[];
+] as const satisfies readonly StaticProviderId[];
 
 export type ProviderSource =
   | "oauth"
@@ -209,6 +213,12 @@ export type QuotaWindow = {
   windowSeconds?: number;
   spentUsd?: number;
   limitUsd?: number;
+  /** Provider-native spend amount when the currency is not normalized to USD. */
+  spent?: number;
+  /** Provider-native spend limit when the currency is not normalized to USD. */
+  limit?: number;
+  /** ISO-style uppercase currency code for provider-native spend fields. */
+  currency?: string;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
@@ -310,6 +320,11 @@ export type ProviderQuota = {
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
   };
+  /**
+   * Runtime-configured providers may declare which windows bound each scope.
+   * Static providers keep their relationships in interpretation.ts.
+   */
+  customScopeBindings?: Record<string, string[]>;
   state: {
     status: ProviderStatus;
     stale: boolean;

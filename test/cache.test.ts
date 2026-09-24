@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -568,6 +569,37 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedProvider("kimi")?.state.untrustedWindowIds).toEqual([
       "limit:2",
     ]);
+  });
+
+  it("does not write custom HTTP provider snapshots to the cache", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        provider: "custom:example",
+        label: "Example HTTP Spend",
+        source: "api",
+        windows: [
+          {
+            id: "daily_total",
+            label: "daily total",
+            kind: "credits",
+            percentUsed: 25,
+            spent: 5,
+            limit: 20,
+            currency: "EUR",
+          },
+        ],
+        customScopeBindings: { all_models: ["daily_total"] },
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: "2026-07-06T18:10:00Z",
+          sourcesTried: ["custom-http"],
+        },
+      },
+    ]);
+
+    expect(existsSync(cacheFilePath())).toBe(false);
   });
 
   it("retains trusted cycle evidence but never caches derived pace", () => {

@@ -265,6 +265,7 @@ function readCachedProviderInContext(
 export function writeCachedProviders(providers: ProviderQuota[]): void {
   providers = providers.filter(
     (provider) =>
+      !provider.provider.startsWith("custom:") &&
       !(
         (provider.provider === "claude" || provider.provider === "copilot") &&
         provider.source === "cli"
@@ -299,8 +300,8 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     byProvider.set(cacheIdentity(provider.snapshot), provider);
   const merged = [...byProvider.values()].sort(
     (a, b) =>
-      PROVIDER_IDS.indexOf(a.snapshot.provider) -
-        PROVIDER_IDS.indexOf(b.snapshot.provider) ||
+      providerSortIndex(a.snapshot.provider) -
+        providerSortIndex(b.snapshot.provider) ||
       (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
         b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
       ),
@@ -733,6 +734,10 @@ function cachedSource(value: unknown): ProviderSource | undefined {
     return source as ProviderSource;
   }
   return isPiCodexSource(source) ? (source as ProviderSource) : undefined;
+}
+
+function providerSortIndex(provider: ProviderId): number {
+  return PROVIDER_IDS.indexOf(provider as (typeof PROVIDER_IDS)[number]);
 }
 
 function literalValue<const T extends readonly string[]>(

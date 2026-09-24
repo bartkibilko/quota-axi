@@ -179,6 +179,7 @@ describe("CLI flag parsing", () => {
           "elevenlabs",
           "devin",
         ],
+        adapters: expect.any(Object),
         json: true,
         full: true,
         explicitProviders: false,

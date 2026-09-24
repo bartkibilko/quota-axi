@@ -2,6 +2,10 @@ import { agyAdapter } from "./agy.js";
 import { alibabaAdapter } from "./alibaba.js";
 import { claudeAdapter } from "./claude.js";
 import { commandCodeAdapter } from "./commandcode.js";
+import {
+  createCustomHttpAdapter,
+  readCustomHttpProviderConfigs,
+} from "./custom-http.js";
 import { codexAdapter } from "./codex.js";
 import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
@@ -16,12 +20,12 @@ import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
 import {
-  PROVIDER_IDS,
   type ProviderAdapter,
   type ProviderId,
+  type StaticProviderId,
 } from "../types.js";
 
-export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
+export const PROVIDERS: Record<StaticProviderId, ProviderAdapter> = {
   claude: claudeAdapter,
   codex: codexAdapter,
   cursor: cursorAdapter,
@@ -41,19 +45,44 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   devin: devinAdapter,
 };
 
-export function parseProviders(value: string | undefined): ProviderId[] {
-  if (!value) return [...PROVIDER_IDS];
+export function parseProviders(
+  value: string | undefined,
+  registry: Record<ProviderId, ProviderAdapter>,
+): ProviderId[] {
+  const providerIds = Object.keys(registry) as ProviderId[];
+  if (!value) return providerIds;
   const providers = value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  const invalid = providers.find((provider) => !isProviderId(provider));
+  const invalid = providers.find(
+    (provider) => !isProviderId(provider, registry),
+  );
   if (invalid) {
     throw new Error(`unsupported provider: ${invalid}`);
   }
   return [...new Set(providers)] as ProviderId[];
 }
 
-function isProviderId(value: string): value is ProviderId {
-  return PROVIDER_IDS.includes(value as ProviderId);
+export function loadProviderAdapters(): Record<ProviderId, ProviderAdapter> {
+  const configured = readCustomHttpProviderConfigs().map((config) =>
+    createCustomHttpAdapter(config),
+  );
+  const registry: Record<string, ProviderAdapter> = { ...PROVIDERS };
+  for (const adapter of configured) {
+    if (registry[adapter.id]) {
+      throw new Error(
+        `custom HTTP provider duplicates provider id: ${adapter.id}`,
+      );
+    }
+    registry[adapter.id] = adapter;
+  }
+  return registry as Record<ProviderId, ProviderAdapter>;
+}
+
+function isProviderId(
+  value: string,
+  registry: Record<ProviderId, ProviderAdapter>,
+): value is ProviderId {
+  return Object.hasOwn(registry, value);
 }

@@ -322,23 +322,81 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                                                                                                         | Description                                                                                                            |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,commandcode,minimax,mimo,deepseek,openrouter,elevenlabs,devin` | Scope providers; repeat to union in first-seen order (`--provider zai --provider codex` equals `--provider zai,codex`) |
-| `--json`                                                                                                                                     | Emit normalized JSON instead of TOON for quota, auth, or models                                                        |
-| `--full`                                                                                                                                     | Include audit and derivation details                                                                                   |
-| `--tui`                                                                                                                                      | Render the live human terminal report instead of TOON (quota only)                                                     |
-| `--refresh 30s\|5m\|1h`                                                                                                                      | Live `--tui` refresh interval, default 5m (30s-24h)                                                                    |
-| `--once`                                                                                                                                     | Render one `--tui` frame and exit instead of staying live                                                              |
-| `--all`                                                                                                                                      | Draw not-set-up providers as full `--tui` cards                                                                        |
-| `--allow-keychain-prompt`                                                                                                                    | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
-| `--allow-claude-inference`                                                                                                                   | Spend one bounded native Claude inference to read env-token quota headers                                              |
-| `--no-credential-refresh`                                                                                                                    | Never run a vendor CLI's own non-interactive credential refresh                                                        |
-| `--profile-only`                                                                                                                             | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
-| `--intelligence high\|medium\|low`                                                                                                           | Filter `models` by editorial intelligence bucket                                                                       |
-| `--sort runway`                                                                                                                              | Explicitly sort `models` by documented usable-runway evidence                                                          |
-| `-h`, `--help`                                                                                                                               | Print terse [AXI](https://axi.md) help                                                                                 |
-| `-v`, `-V`, `--version`                                                                                                                      | Print version                                                                                                          |
+| Flag                                                                                                                                                  | Description                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,commandcode,minimax,mimo,deepseek,openrouter,elevenlabs,devin,custom:*` | Scope providers; repeat to union in first-seen order (`--provider zai --provider codex` equals `--provider zai,codex`) |
+| `--json`                                                                                                                                              | Emit normalized JSON instead of TOON for quota, auth, or models                                                        |
+| `--full`                                                                                                                                              | Include audit and derivation details                                                                                   |
+| `--tui`                                                                                                                                               | Render the live human terminal report instead of TOON (quota only)                                                     |
+| `--refresh 30s\|5m\|1h`                                                                                                                               | Live `--tui` refresh interval, default 5m (30s-24h)                                                                    |
+| `--once`                                                                                                                                              | Render one `--tui` frame and exit instead of staying live                                                              |
+| `--all`                                                                                                                                               | Draw not-set-up providers as full `--tui` cards                                                                        |
+| `--allow-keychain-prompt`                                                                                                                             | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
+| `--allow-claude-inference`                                                                                                                            | Spend one bounded native Claude inference to read env-token quota headers                                              |
+| `--no-credential-refresh`                                                                                                                             | Never run a vendor CLI's own non-interactive credential refresh                                                        |
+| `--profile-only`                                                                                                                                      | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
+| `--intelligence high\|medium\|low`                                                                                                                    | Filter `models` by editorial intelligence bucket                                                                       |
+| `--sort runway`                                                                                                                                       | Explicitly sort `models` by documented usable-runway evidence                                                          |
+| `-h`, `--help`                                                                                                                                        | Print terse [AXI](https://axi.md) help                                                                                 |
+| `-v`, `-V`, `--version`                                                                                                                               | Print version                                                                                                          |
+
+### Custom HTTP spend providers
+
+Local configuration can add generic HTTP spend providers with `custom:*` ids. This is for read-only internal dashboards or proxy endpoints that already publish quota-like spend data, while keeping private hostnames, user selectors, and field names out of the repository.
+
+Add `customHttpProviders` to `~/.config/quota-axi/config.json`, or `$XDG_CONFIG_HOME/quota-axi/config.json` when `XDG_CONFIG_HOME` is set:
+
+```json
+{
+  "customHttpProviders": [
+    {
+      "id": "custom:example",
+      "label": "Example HTTP Spend",
+      "usageUrl": "https://example.com/usage/daily",
+      "limitsUrl": "https://example.com/limits/current",
+      "recordsPath": "users",
+      "ownerSelector": {
+        "field": "email",
+        "valueEnv": "QUOTA_AXI_EXAMPLE_USER"
+      },
+      "reset": {
+        "lastResetField": "daily_last_reset_time",
+        "durationDaysField": "spendingWindowDays"
+      },
+      "windows": [
+        {
+          "id": "daily_total",
+          "label": "daily total",
+          "scopes": ["all_models", "high_class_models"],
+          "spendField": "daily_spend_eur",
+          "limitSource": "limits",
+          "limitField": "fullSpendingCutoffEur",
+          "currency": "EUR"
+        },
+        {
+          "id": "daily_high_class",
+          "label": "daily high class",
+          "scopes": ["high_class_models"],
+          "spendField": "daily_spend_eur",
+          "limitSource": "limits",
+          "limitField": "highClassSpendingCutoffEur",
+          "currency": "EUR"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Then run:
+
+```sh
+QUOTA_AXI_EXAMPLE_USER=owner@example.com quota-axi --provider custom:example
+```
+
+The schema is deliberately small and strict. Provider ids must start with `custom:`; URLs must be `http` or `https`; each provider must select one owner record from `recordsPath` by matching the string form of a scalar `ownerSelector.field` (string, number, or boolean) against either `value` or an environment variable named by `valueEnv`, and fails with `owner_record_not_found` when none matches unless `missingRecord: "zero"` reports zero spend for that absence (only for windows whose limits come from `limitsUrl` or a fixed `limitValue`); windows read numeric `spendField` values from that selected record and a numeric limit from either the usage record or `limitsUrl`; each window must declare exactly one of a fixed `currency` code or a `currencyField` read from the same record as its limit, because quota-axi never assumes a spend currency; scopes are bound by the window ids named in their `scopes` arrays. `reset.lastResetField` anchors the start of the current window, and `durationDays` or `durationDaysField` may extend it; a window longer than one day fails with `reset_anchor_required` unless the selected record actually carries `lastResetField`, and without that anchor quota-axi uses the current UTC midnight as a one-day fallback only. Unknown keys, malformed custom-provider config, and a config file that exists but cannot be read or parsed as a JSON object produce a validation error naming the problem instead of being ignored; the `--tui` display preference read stays permissive.
+
+Custom HTTP providers never send credentials, headers, or request bodies. Response bodies are bounded like native provider responses, and quota-axi serializes only the selected owner's normalized windows plus configured scope bindings into the live report. It does not cache custom HTTP readings, print or store other records from a roster response, or include private examples in the repository; examples should use synthetic data such as `example.com`.
 
 ### Profile-only quota reads
 
@@ -360,7 +418,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 - Live frames paint on the alternate screen and repaint immediately on terminal resize; quitting restores the screen and prints the final frame so the last report stays in scrollback.
 - Height comes from the terminal too. When the report is taller than the terminal, the live view windows it instead of letting the alternate screen (which has no scrollback) push the header and first cards out of reach. The viewport accounts for physical rows after terminal-width wrapping: a full-width visible line can consume its own row without wrapping the optional scroll affordance, which is omitted when it cannot fit. At five or more rows the header stays pinned; when there is room, the last row carries a scroll affordance naming how many report lines are above and below. Below five rows the header scrolls with the other report content, and at one row the scroll affordance is omitted so content still remains visible. Use `j`/`k`, the arrow keys, `PgUp`/`PgDn`, `Space`/`b`, or `g`/`G` to move the window. Scrolling clamps at both ends, survives a refresh, and re-clamps on resize; growing the terminal back past the report's height restores the whole frame and the ordinary `Press r to refresh · q to quit` footer. `--once`, non-TTY output, the final frame echoed on quit, and the TOON and JSON surfaces are all unaffected by terminal height.
 - Each live card with a combinable bound leads with the effective-availability rollup (min across bounding windows), colored by headroom: >=50% healthy, 20-50% tight, <20% critical. Per-window rows, including per-model breakouts, are the supporting detail.
-- Percentages and bars show what is left by default. To have every provider's headline, window rows, and bars show what has been used instead, set `tui.show` to `used` in the user config file `~/.config/quota-axi/config.json` (`$XDG_CONFIG_HOME/quota-axi/config.json` when `XDG_CONFIG_HOME` is set): `{ "tui": { "show": "used" } }`. That file is the only place the preference is read - there is no environment variable or flag for it - and it is read once when `--tui` starts, so restart a live report to pick up a change. Only the exact values `used` and `remaining` are recognized; a missing, unreadable, or malformed file, or any other value, keeps the default remaining view. The used view rounds the raw consumed percentage independently of the remaining view, so rounded figures need not sum to 100% (48.5% used / 51.5% remaining displays 49% used / 52% remaining). It labels each headline `49% used · week`. Its bar fill is consumption, the `┃` marker moves to the elapsed share of the window, and fill running past the marker means burning ahead of the reset clock. Health colors, runway verdicts, used-share rows, raw credit balances, and `?` rows read the same in both views. It is a human display preference only: quota-axi never reads the file outside `--tui`, so the default TOON, `--json`, `--full`, and the cache are byte-identical whatever it says.
+- Percentages and bars show what is left by default. To have every provider's headline, window rows, and bars show what has been used instead, set `tui.show` to `used` in the user config file `~/.config/quota-axi/config.json` (`$XDG_CONFIG_HOME/quota-axi/config.json` when `XDG_CONFIG_HOME` is set): `{ "tui": { "show": "used" } }`. That file is the only place the preference is read - there is no environment variable or flag for it - and it is read once when `--tui` starts, so restart a live report to pick up a change. Only the exact values `used` and `remaining` are recognized; a missing file, a malformed `tui` entry, or any other value keeps the default remaining view. The preference read itself ignores a malformed file, but every provider-data command also reads the same file for `customHttpProviders`, so a file that exists but cannot be read or parsed as a JSON object fails them with a validation error. The used view rounds the raw consumed percentage independently of the remaining view, so rounded figures need not sum to 100% (48.5% used / 51.5% remaining displays 49% used / 52% remaining). It labels each headline `49% used · week`. Its bar fill is consumption, the `┃` marker moves to the elapsed share of the window, and fill running past the marker means burning ahead of the reset clock. Health colors, runway verdicts, used-share rows, raw credit balances, and `?` rows read the same in both views. It is a human display preference only: quota-axi reads the `tui` entry only for `--tui`, so the default TOON, `--json`, `--full`, and the cache are byte-identical whatever `tui.show` says.
 - A window with `shareOf` is a used-share, not an independent remaining pool: the row prints `N% of <parent>` (or `share of <parent>` when `percentUsed` is absent) instead of a remaining bar or `?`, so it cannot be read as missing data or as its own headroom.
 - The headline is labeled with the window it actually is: the minimum across bounding windows always equals at least one named window, so the label names the `limitingWindowIds` window (`week`, `session`, `credits`) and changes per provider and over time. Tied limiting windows read `credits + grok build`, compacting to `credits +2` when the names do not fit; a model- or product-scoped headline appends its scope, and any unresolved limiter falls back to the scope wording (`all models`).
 - In the default view, the bar fill is current headroom; the `┃` marker sits at the binding window's `pace.timeRemainingPercent`, the fill position of exactly linear burn. The headline marker therefore matches the corresponding `limitingWindowIds` sub-bar even when another window supplies the finite-runway `empty in` verdict. Fill ending left of the marker means burning faster than the reset clock. The marker is omitted when that window's pace is unknown.

@@ -1,11 +1,12 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
-import { parseProviders } from "./providers/index.js";
+import { loadProviderAdapters, parseProviders } from "./providers/index.js";
 import {
-  PROVIDER_IDS,
   type IntelligenceBucket,
   type ModelSortKey,
+  type ProviderAdapter,
   type ProviderId,
+  PROVIDER_IDS,
 } from "./types.js";
 
 export type QuotaFlags = {
@@ -15,6 +16,11 @@ export type QuotaFlags = {
    * folded out of the human report or omitted from default TOON.
    */
   explicitProviders: boolean;
+  /**
+   * The provider registry `providers` was resolved against, loaded once so
+   * later reads never re-resolve a config that changed after parsing.
+   */
+  adapters: Record<ProviderId, ProviderAdapter>;
   json: boolean;
   full: boolean;
   tui: boolean;
@@ -240,7 +246,7 @@ function parseCommonFlags(
   }
 
   return {
-    providers: parseProviderScope(providerValues, defaultProviders),
+    ...parseProviderScope(providerValues, defaultProviders),
     explicitProviders: providerValues.length > 0,
     json,
     full,
@@ -308,31 +314,50 @@ function parseSortValue(value: string | undefined): ModelSortKey {
 function parseProviderScope(
   values: readonly string[],
   defaultProviders?: readonly ProviderId[],
-): ProviderId[] {
-  if (values.length === 0) {
-    return defaultProviders ? [...defaultProviders] : parseProviders(undefined);
-  }
+): {
+  providers: ProviderId[];
+  adapters: Record<ProviderId, ProviderAdapter>;
+} {
   try {
-    const seen = new Set<ProviderId>();
-    const providers: ProviderId[] = [];
-    for (const value of values) {
-      if (!value.trim()) continue;
-      for (const provider of parseProviders(value)) {
-        if (seen.has(provider)) continue;
-        seen.add(provider);
-        providers.push(provider);
-      }
-    }
-    return providers.length > 0
-      ? providers
-      : defaultProviders
-        ? [...defaultProviders]
-        : parseProviders(undefined);
+    const adapters = loadProviderAdapters();
+    return {
+      providers: selectProviders(values, adapters, defaultProviders),
+      adapters,
+    };
   } catch (error) {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      [`Supported providers: ${PROVIDER_IDS.join(", ")}`],
+      [
+        `Supported providers: ${PROVIDER_IDS.join(", ")}, plus configured custom:* providers`,
+      ],
     );
   }
+}
+
+function selectProviders(
+  values: readonly string[],
+  adapters: Record<ProviderId, ProviderAdapter>,
+  defaultProviders?: readonly ProviderId[],
+): ProviderId[] {
+  if (values.length === 0) {
+    return defaultProviders
+      ? [...defaultProviders]
+      : parseProviders(undefined, adapters);
+  }
+  const seen = new Set<ProviderId>();
+  const providers: ProviderId[] = [];
+  for (const value of values) {
+    if (!value.trim()) continue;
+    for (const provider of parseProviders(value, adapters)) {
+      if (seen.has(provider)) continue;
+      seen.add(provider);
+      providers.push(provider);
+    }
+  }
+  return providers.length > 0
+    ? providers
+    : defaultProviders
+      ? [...defaultProviders]
+      : parseProviders(undefined, adapters);
 }

@@ -125,6 +125,9 @@ function semanticsFor(
   provider: ProviderQuota,
   generatedAt: string,
 ): QuotaSemantics {
+  if (provider.provider.startsWith("custom:")) {
+    return customHttpSemantics(provider, generatedAt);
+  }
   switch (provider.provider) {
     case "claude":
       return claudeSemantics(provider.windows, generatedAt);
@@ -189,6 +192,30 @@ function semanticsFor(
         generatedAt,
       );
   }
+  return unknownSemantics(
+    provider.windows,
+    `quota-axi does not know how to interpret ${provider.label ?? provider.provider}'s windows, so it does not claim an effective remaining percentage.`,
+  );
+}
+
+function customHttpSemantics(
+  provider: ProviderQuota,
+  generatedAt: string,
+): QuotaSemantics {
+  const byId = new Map(provider.windows.map((window) => [window.id, window]));
+  const effectiveAvailability = Object.entries(
+    provider.customScopeBindings ?? {},
+  ).map(([scope, windowIds]) =>
+    availability(
+      scope,
+      windowIds.flatMap((id) => byId.get(id) ?? []),
+      generatedAt,
+    ),
+  );
+  return knownSemantics(
+    effectiveAvailability,
+    "This custom HTTP spend provider treats each configured scope as bounded by the configured spend windows for that scope.",
+  );
 }
 
 /**
