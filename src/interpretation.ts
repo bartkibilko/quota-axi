@@ -125,6 +125,9 @@ function semanticsFor(
   provider: ProviderQuota,
   generatedAt: string,
 ): QuotaSemantics {
+  if (provider.provider.startsWith("custom:")) {
+    return customHttpSemantics(provider, generatedAt);
+  }
   switch (provider.provider) {
     case "claude":
       return claudeSemantics(provider.windows, generatedAt);
@@ -189,6 +192,68 @@ function semanticsFor(
         generatedAt,
       );
   }
+  return unknownSemantics(
+    provider.windows,
+    `quota-axi does not know how to interpret ${provider.label ?? provider.provider}'s windows, so it does not claim an effective remaining percentage.`,
+  );
+}
+
+function customHttpSemantics(
+  provider: ProviderQuota,
+  generatedAt: string,
+): QuotaSemantics {
+  const bindings = provider.customScopeBindings ?? {};
+  const byId = new Map(provider.windows.map((window) => [window.id, window]));
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  const unresolvedWindowIds: string[] = [];
+  const bound = new Set<string>();
+  for (const [scope, windowIds] of Object.entries(bindings)) {
+    const windows: QuotaWindow[] = [];
+    for (const id of windowIds) {
+      const window = byId.get(id);
+      if (window) {
+        windows.push(window);
+        bound.add(id);
+      } else {
+        unresolvedWindowIds.push(id);
+      }
+    }
+    if (windows.length > 0) {
+      effectiveAvailability.push(
+        unresolvedWindowIds.length > 0
+          ? unresolvedAvailability(scope, windows, unresolvedWindowIds)
+          : availability(scope, windows, generatedAt),
+      );
+    }
+  }
+  for (const window of provider.windows) {
+    if (!bound.has(window.id)) unresolvedWindowIds.push(window.id);
+  }
+  const uniqueUnresolved = [...new Set(unresolvedWindowIds)];
+  if (uniqueUnresolved.length > 0) {
+    return {
+      status: effectiveAvailability.length > 0 ? "partial" : "unknown",
+      description:
+        "This custom HTTP spend provider reports configured spend windows. Unbound or missing configured windows are left unresolved rather than folded into a scope.",
+      effectiveAvailability:
+        uniqueUnresolved.length > 0
+          ? effectiveAvailability.map((entry) =>
+              unresolvedAvailability(
+                entry.scope,
+                provider.windows.filter((window) =>
+                  entry.boundedBy.includes(window.id),
+                ),
+                uniqueUnresolved,
+              ),
+            )
+          : effectiveAvailability,
+      unresolvedWindowIds: uniqueUnresolved,
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "This custom HTTP spend provider treats each configured scope as bounded by the configured spend windows for that scope.",
+  );
 }
 
 /**

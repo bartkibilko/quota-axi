@@ -1,8 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
-import { parseProviders } from "./providers/index.js";
+import { parseProviders, supportedProviderIds } from "./providers/index.js";
 import {
-  PROVIDER_IDS,
   type IntelligenceBucket,
   type ModelSortKey,
   type ProviderId,
@@ -332,7 +331,7 @@ function parseProviderScope(
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      [`Supported providers: ${PROVIDER_IDS.join(", ")}`],
+      [`Supported providers: ${supportedProviderIds().join(", ")}`],
     );
   }
 }

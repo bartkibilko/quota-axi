@@ -13,6 +13,7 @@ import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
 import type {
+  CustomProviderId,
   ProviderId,
   ProviderQuota,
   ProviderSource,
@@ -299,8 +300,9 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     byProvider.set(cacheIdentity(provider.snapshot), provider);
   const merged = [...byProvider.values()].sort(
     (a, b) =>
-      PROVIDER_IDS.indexOf(a.snapshot.provider) -
-        PROVIDER_IDS.indexOf(b.snapshot.provider) ||
+      providerSortIndex(a.snapshot.provider) -
+        providerSortIndex(b.snapshot.provider) ||
+      a.snapshot.provider.localeCompare(b.snapshot.provider) ||
       (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
         b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
       ),
@@ -381,6 +383,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       plan: provider.plan,
       windows: provider.windows,
       credits: provider.credits,
+      customScopeBindings: provider.customScopeBindings,
       state: {
         status: provider.state.status,
         stale: false,
@@ -434,7 +437,7 @@ function normalizeCachedProvider(
 ): CachedProvider | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
-  const provider = literalValue(data.provider, PROVIDER_IDS);
+  const provider = cachedProviderId(data.provider);
   const label = stringValue(data.label);
   const source = cachedSource(data.source);
   const state = objectValue(data.state);
@@ -484,11 +487,16 @@ function normalizeCachedProvider(
   const refreshedAt = stringValue(state.refreshedAt);
   const untrustedWindowIds = stringArrayValue(state.untrustedWindowIds);
   const credits = normalizeCachedCredits(data.credits);
+  const customScopeBindings = normalizeCachedScopeBindings(
+    data.customScopeBindings,
+    windows,
+  );
   if (plan) snapshot.plan = plan;
   if (refreshedAt) snapshot.state.refreshedAt = refreshedAt;
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
+  if (customScopeBindings) snapshot.customScopeBindings = customScopeBindings;
   const credentialContext = stringValue(data.credentialContext);
   return {
     snapshot,
@@ -651,6 +659,9 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "windowSeconds", data.windowSeconds);
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
+  assignNumber(result, "spent", data.spent);
+  assignNumber(result, "limit", data.limit);
+  assignString(result, "currency", data.currency);
   return result;
 }
 
@@ -733,6 +744,42 @@ function cachedSource(value: unknown): ProviderSource | undefined {
     return source as ProviderSource;
   }
   return isPiCodexSource(source) ? (source as ProviderSource) : undefined;
+}
+
+function cachedProviderId(value: unknown): ProviderId | undefined {
+  const provider = literalValue(value, PROVIDER_IDS);
+  if (provider) return provider;
+  return typeof value === "string" &&
+    /^custom:[a-z0-9][a-z0-9_-]{0,63}$/.test(value)
+    ? (value as CustomProviderId)
+    : undefined;
+}
+
+function providerSortIndex(provider: ProviderId): number {
+  const index = PROVIDER_IDS.indexOf(provider as (typeof PROVIDER_IDS)[number]);
+  return index >= 0 ? index : PROVIDER_IDS.length;
+}
+
+function normalizeCachedScopeBindings(
+  raw: unknown,
+  windows: QuotaWindow[],
+): Record<string, string[]> | undefined {
+  const data = objectValue(raw);
+  if (!data) return undefined;
+  const windowIds = new Set(windows.map(({ id }) => id));
+  const result: Record<string, string[]> = {};
+  for (const [scope, ids] of Object.entries(data)) {
+    if (!/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(scope)) return undefined;
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      !ids.every((id) => typeof id === "string" && windowIds.has(id))
+    ) {
+      return undefined;
+    }
+    result[scope] = ids;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function literalValue<const T extends readonly string[]>(

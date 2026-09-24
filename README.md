@@ -322,23 +322,84 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                                                                                                         | Description                                                                                                            |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,commandcode,minimax,mimo,deepseek,openrouter,elevenlabs,devin` | Scope providers; repeat to union in first-seen order (`--provider zai --provider codex` equals `--provider zai,codex`) |
-| `--json`                                                                                                                                     | Emit normalized JSON instead of TOON for quota, auth, or models                                                        |
-| `--full`                                                                                                                                     | Include audit and derivation details                                                                                   |
-| `--tui`                                                                                                                                      | Render the live human terminal report instead of TOON (quota only)                                                     |
-| `--refresh 30s\|5m\|1h`                                                                                                                      | Live `--tui` refresh interval, default 5m (30s-24h)                                                                    |
-| `--once`                                                                                                                                     | Render one `--tui` frame and exit instead of staying live                                                              |
-| `--all`                                                                                                                                      | Draw not-set-up providers as full `--tui` cards                                                                        |
-| `--allow-keychain-prompt`                                                                                                                    | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
-| `--allow-claude-inference`                                                                                                                   | Spend one bounded native Claude inference to read env-token quota headers                                              |
-| `--no-credential-refresh`                                                                                                                    | Never run a vendor CLI's own non-interactive credential refresh                                                        |
-| `--profile-only`                                                                                                                             | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
-| `--intelligence high\|medium\|low`                                                                                                           | Filter `models` by editorial intelligence bucket                                                                       |
-| `--sort runway`                                                                                                                              | Explicitly sort `models` by documented usable-runway evidence                                                          |
-| `-h`, `--help`                                                                                                                               | Print terse [AXI](https://axi.md) help                                                                                 |
-| `-v`, `-V`, `--version`                                                                                                                      | Print version                                                                                                          |
+| Flag                                                                                                                                                  | Description                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,commandcode,minimax,mimo,deepseek,openrouter,elevenlabs,devin,custom:*` | Scope providers; repeat to union in first-seen order (`--provider zai --provider codex` equals `--provider zai,codex`) |
+| `--json`                                                                                                                                              | Emit normalized JSON instead of TOON for quota, auth, or models                                                        |
+| `--full`                                                                                                                                              | Include audit and derivation details                                                                                   |
+| `--tui`                                                                                                                                               | Render the live human terminal report instead of TOON (quota only)                                                     |
+| `--refresh 30s\|5m\|1h`                                                                                                                               | Live `--tui` refresh interval, default 5m (30s-24h)                                                                    |
+| `--once`                                                                                                                                              | Render one `--tui` frame and exit instead of staying live                                                              |
+| `--all`                                                                                                                                               | Draw not-set-up providers as full `--tui` cards                                                                        |
+| `--allow-keychain-prompt`                                                                                                                             | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
+| `--allow-claude-inference`                                                                                                                            | Spend one bounded native Claude inference to read env-token quota headers                                              |
+| `--no-credential-refresh`                                                                                                                             | Never run a vendor CLI's own non-interactive credential refresh                                                        |
+| `--profile-only`                                                                                                                                      | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
+| `--intelligence high\|medium\|low`                                                                                                                    | Filter `models` by editorial intelligence bucket                                                                       |
+| `--sort runway`                                                                                                                                       | Explicitly sort `models` by documented usable-runway evidence                                                          |
+| `-h`, `--help`                                                                                                                                        | Print terse [AXI](https://axi.md) help                                                                                 |
+| `-v`, `-V`, `--version`                                                                                                                               | Print version                                                                                                          |
+
+### Custom HTTP spend providers
+
+Local configuration can add generic HTTP spend providers with `custom:*` ids. This is for read-only internal dashboards or proxy endpoints that already publish quota-like spend data, while keeping private hostnames, user selectors, and field names out of the repository.
+
+Add `customHttpProviders` to `~/.config/quota-axi/config.json`, or `$XDG_CONFIG_HOME/quota-axi/config.json` when `XDG_CONFIG_HOME` is set:
+
+```json
+{
+  "customHttpProviders": [
+    {
+      "id": "custom:example",
+      "label": "Example HTTP Spend",
+      "usageUrl": "https://example.com/usage/daily",
+      "limitsUrl": "https://example.com/limits/current",
+      "recordsPath": "users",
+      "ownerSelector": {
+        "field": "email",
+        "valueEnv": "QUOTA_AXI_EXAMPLE_USER"
+      },
+      "reset": {
+        "type": "daily",
+        "time": "00:00",
+        "timezone": "UTC",
+        "lastResetField": "daily_last_reset_time",
+        "durationDaysField": "spendingWindowDays"
+      },
+      "windows": [
+        {
+          "id": "daily_total",
+          "label": "daily total",
+          "scopes": ["all_models", "high_class_models"],
+          "spendField": "daily_spend_eur",
+          "limitSource": "limits",
+          "limitField": "fullSpendingCutoffEur",
+          "currency": "EUR"
+        },
+        {
+          "id": "daily_high_class",
+          "label": "daily high class",
+          "scopes": ["high_class_models"],
+          "spendField": "daily_spend_eur",
+          "limitSource": "limits",
+          "limitField": "highClassSpendingCutoffEur",
+          "currency": "EUR"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Then run:
+
+```sh
+QUOTA_AXI_EXAMPLE_USER=owner@example.com quota-axi --provider custom:example
+```
+
+The schema is deliberately small and strict. Provider ids must start with `custom:`; URLs must be `http` or `https`; each provider must select one owner record from `recordsPath` by matching `ownerSelector.field` against either `value` or an environment variable named by `valueEnv`; windows read numeric `spendField` values from that selected record and a numeric limit from either the usage record or `limitsUrl`; scopes are bound by the window ids named in their `scopes` arrays. Unknown keys and malformed custom-provider config produce a validation error instead of being ignored.
+
+Custom HTTP providers never send credentials, headers, or request bodies. Response bodies are bounded like native provider responses, and quota-axi serializes only the selected owner's normalized windows plus configured scope bindings. It does not print, cache, or store other records from a roster response, and examples should use synthetic data such as `example.com`.
 
 ### Profile-only quota reads
 

@@ -11,7 +11,7 @@ import {
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "./providers/accounts.js";
-import { PROVIDERS } from "./providers/index.js";
+import { loadProviderAdapters } from "./providers/index.js";
 import {
   quotaJsonReport,
   redactedResponse,
@@ -59,13 +59,14 @@ export async function quotaCommand(
   if (flags.tui) return quotaTuiReport(flags, options);
 
   const response = await loadQuota(flags.providers, options, false);
+  const adapters = loadProviderAdapters();
   // Presence reads source attempts, which redaction removes, so both the JSON
   // marker and the TOON omission are classified on the complete model first.
   // The same rule as the human report: an explicit --provider never folds,
   // and --full adds the omitted rows back instead of counting them.
   const laneAbsent = response.providers.map(
     (provider) =>
-      providerPresence(provider, PROVIDERS[provider.provider]) === "absent",
+      providerPresence(provider, adapters[provider.provider]) === "absent",
   );
   if (flags.json) {
     return JSON.stringify(
@@ -118,6 +119,7 @@ async function quotaTuiReport(
   // A human display preference, so it is read only on this path: TOON and
   // JSON never see it.
   const show = readTuiShowPreference();
+  const adapters = loadProviderAdapters();
   const terminal = (): { columns?: number; colorDepth: TuiColorDepth } => ({
     ...(process.stdout.columns === undefined
       ? {}
@@ -132,7 +134,7 @@ async function quotaTuiReport(
     // Presence reads the source attempts, which redaction removes, so it is
     // derived from the complete model before the renderer sees the report.
     const presence = response.providers.map((provider) =>
-      providerPresence(provider, PROVIDERS[provider.provider]),
+      providerPresence(provider, adapters[provider.provider]),
     );
     notSetUp = presence.filter((entry) => entry === "absent").length;
     return renderQuotaTui(redactedResponse(response, flags.full), {
@@ -338,10 +340,11 @@ export async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<QuotaAxiResponse> {
+  const adapters = loadProviderAdapters();
   const fetched = (
     await Promise.all(
       providers.map((provider) =>
-        fetchAccountQuotas(PROVIDERS[provider], options),
+        fetchAccountQuotas(adapters[provider], options),
       ),
     )
   ).flat();
@@ -363,10 +366,11 @@ async function inspectAuth(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
+  const adapters = loadProviderAdapters();
   const reports = (
     await Promise.all(
       providers.map((provider) =>
-        inspectAccountAuth(PROVIDERS[provider], options),
+        inspectAccountAuth(adapters[provider], options),
       ),
     )
   ).flat();
