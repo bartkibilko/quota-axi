@@ -123,7 +123,7 @@ describe("custom HTTP provider", () => {
   });
 
   it("requires every window to declare its spend currency", () => {
-    const { currency: _currency, ...window } = exampleConfig().windows[0];
+    const window = { ...exampleConfig().windows[0], currency: undefined };
     const file = writeConfig({
       customHttpProviders: [{ ...exampleConfig(), windows: [window] }],
     });
@@ -170,6 +170,95 @@ describe("custom HTTP provider", () => {
     expect(() => readCustomHttpProviderConfigs(file)).toThrow(
       "customHttpProviders[0].windows[0].recordPath unsupported_with_missing_record_zero",
     );
+  });
+
+  it("rejects a zero-missing owner reset duration read from the usage record", () => {
+    const config = { ...exampleConfig(), limitsUrl: undefined };
+    const file = writeConfig({
+      customHttpProviders: [
+        {
+          ...config,
+          missingRecord: "zero",
+          windows: config.windows.map(
+            ({ limitSource: _source, limitField: _field, ...window }) => ({
+              ...window,
+              limitValue: 20,
+            }),
+          ),
+        },
+      ],
+    });
+
+    expect(() => readCustomHttpProviderConfigs(file)).toThrow(
+      "customHttpProviders[0].reset.durationDaysField unsupported_with_missing_record_zero",
+    );
+  });
+
+  it("matches numeric owner and window selector fields against string values", () => {
+    const normalized = normalizeCustomHttpPayload(
+      {
+        ...exampleConfig(),
+        missingRecord: "zero",
+        ownerSelector: { field: "user_id", valueEnv: "QUOTA_AXI_EXAMPLE_USER" },
+      },
+      {
+        usage: {
+          users: [
+            {
+              user_id: 123,
+              daily_spend_eur: 5,
+              daily_last_reset_time: 1_790_208_000_000,
+            },
+          ],
+        },
+        limits: {
+          spendingWindowDays: 1,
+          highClassSpendingCutoffEur: 10,
+          fullSpendingCutoffEur: 20,
+        },
+      },
+      Date.parse("2026-09-24T12:00:00Z"),
+      { QUOTA_AXI_EXAMPLE_USER: "123" },
+    );
+    expect(normalized.windows).toMatchObject([
+      { id: "daily_total", spent: 5, percentRemaining: 75 },
+      { id: "daily_high_class", spent: 5, percentRemaining: 50 },
+    ]);
+
+    const nested = normalizeCustomHttpPayload(
+      {
+        ...exampleConfig(),
+        windows: [
+          {
+            ...exampleConfig().windows[0],
+            recordPath: "classes",
+            selector: { field: "tier", value: "2" },
+          },
+        ],
+      },
+      {
+        usage: {
+          users: [
+            {
+              email: "owner@example.com",
+              daily_last_reset_time: 1_790_208_000_000,
+              classes: [
+                { tier: 1, daily_spend_eur: 1 },
+                { tier: 2, daily_spend_eur: 8 },
+              ],
+            },
+          ],
+        },
+        limits: {
+          spendingWindowDays: 1,
+          highClassSpendingCutoffEur: 10,
+          fullSpendingCutoffEur: 20,
+        },
+      },
+      Date.parse("2026-09-24T12:00:00Z"),
+      { QUOTA_AXI_EXAMPLE_USER: "owner@example.com" },
+    );
+    expect(nested.windows).toMatchObject([{ id: "daily_total", spent: 8 }]);
   });
 
   it("normalizes only the selected owner's spend windows", async () => {

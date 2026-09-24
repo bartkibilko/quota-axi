@@ -317,7 +317,10 @@ function selectOwnerRecord(
   const expected = selectorValue(config.ownerSelector, environment);
   const record = records.find((candidate) => {
     const object = objectValue(candidate);
-    return object && getPath(object, config.ownerSelector.field) === expected;
+    return (
+      object &&
+      selectorMatches(getPath(object, config.ownerSelector.field), expected)
+    );
   });
   if (record) return record as SelectedRecord;
   if (config.missingRecord === "zero") {
@@ -372,10 +375,22 @@ function selectWindowRecord(
   const expected = selectorValue(config.selector, environment);
   const found = nested.find((candidate) => {
     const object = objectValue(candidate);
-    return object && getPath(object, config.selector?.field ?? "") === expected;
+    return (
+      object &&
+      selectorMatches(getPath(object, config.selector?.field ?? ""), expected)
+    );
   });
   if (!found) throw new CustomHttpError("window_record_not_found");
   return found as SelectedRecord;
+}
+
+function selectorMatches(value: unknown, expected: string): boolean {
+  return (
+    (typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean") &&
+    String(value) === expected
+  );
 }
 
 function limitValue(
@@ -558,6 +573,12 @@ function normalizeProviderConfig(
     return normalized;
   });
   if (missingRecord === "zero") {
+    if (reset.durationDaysField && limitsUrl === undefined) {
+      throw configError(
+        `${path}.reset.durationDaysField`,
+        "unsupported_with_missing_record_zero",
+      );
+    }
     for (const [index, window] of windows.entries()) {
       const limitSource =
         window.limitSource ?? (limitsUrl === undefined ? "usage" : "limits");
