@@ -45,8 +45,10 @@ export const PROVIDERS: Record<StaticProviderId, ProviderAdapter> = {
   devin: devinAdapter,
 };
 
-export function parseProviders(value: string | undefined): ProviderId[] {
-  const registry = loadProviderAdapters();
+export function parseProviders(
+  value: string | undefined,
+  registry: Record<ProviderId, ProviderAdapter>,
+): ProviderId[] {
   const providerIds = Object.keys(registry) as ProviderId[];
   if (!value) return providerIds;
   const providers = value
@@ -76,10 +78,6 @@ export function loadProviderAdapters(): Record<ProviderId, ProviderAdapter> {
     registry[adapter.id] = adapter;
   }
   return registry as Record<ProviderId, ProviderAdapter>;
-}
-
-export function supportedProviderIds(): ProviderId[] {
-  return Object.keys(loadProviderAdapters()) as ProviderId[];
 }
 
 function isProviderId(

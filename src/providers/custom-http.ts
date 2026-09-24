@@ -422,13 +422,13 @@ function resetWindow(
   if (!Number.isInteger(durationDays) || durationDays <= 0) {
     throw new CustomHttpError("invalid_reset_duration");
   }
-  if (durationDays > 1 && !config.reset.lastResetField) {
-    throw new CustomHttpError("reset_anchor_required");
-  }
   const windowSeconds = durationDays * 86_400;
   const fieldValue = config.reset.lastResetField
     ? getPath(owner, config.reset.lastResetField)
     : undefined;
+  if (durationDays > 1 && fieldValue === undefined) {
+    throw new CustomHttpError("reset_anchor_required");
+  }
   const startMs =
     fieldValue === undefined
       ? dailyStartMs(nowMs)

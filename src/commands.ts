@@ -11,7 +11,6 @@ import {
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "./providers/accounts.js";
-import { loadProviderAdapters } from "./providers/index.js";
 import {
   quotaJsonReport,
   redactedResponse,
@@ -29,6 +28,7 @@ import {
 import { scrollHint } from "./tui-viewport.js";
 import type {
   AuthProviderReport,
+  ProviderAdapter,
   ProviderId,
   ProviderOptions,
   ProviderQuota,
@@ -58,8 +58,8 @@ export async function quotaCommand(
 
   if (flags.tui) return quotaTuiReport(flags, options);
 
-  const response = await loadQuota(flags.providers, options, false);
-  const adapters = loadProviderAdapters();
+  const response = await loadQuota(flags, options, false);
+  const adapters = flags.adapters;
   // Presence reads source attempts, which redaction removes, so both the JSON
   // marker and the TOON omission are classified on the complete model first.
   // The same rule as the human report: an explicit --provider never folds,
@@ -119,7 +119,7 @@ async function quotaTuiReport(
   // A human display preference, so it is read only on this path: TOON and
   // JSON never see it.
   const show = readTuiShowPreference();
-  const adapters = loadProviderAdapters();
+  const adapters = flags.adapters;
   const terminal = (): { columns?: number; colorDepth: TuiColorDepth } => ({
     ...(process.stdout.columns === undefined
       ? {}
@@ -147,7 +147,7 @@ async function quotaTuiReport(
   };
 
   if (flags.once || !isInteractiveTerminal()) {
-    return frame(await loadQuota(flags.providers, options, false));
+    return frame(await loadQuota(flags, options, false));
   }
 
   const refreshSeconds = flags.refreshSeconds ?? DEFAULT_REFRESH_SECONDS;
@@ -157,7 +157,7 @@ async function quotaTuiReport(
       ? []
       : [`a ${showNotSetUp ? "hide" : "show"} not set up`];
   const last = await runLiveTui<QuotaAxiResponse>({
-    load: () => loadQuota(flags.providers, options, true),
+    load: () => loadQuota(flags, options, true),
     render: frame,
     status: (scroll) =>
       renderTuiHintLine(
@@ -221,11 +221,11 @@ function processLiveTuiIo(): LiveTuiIo {
  * the exit code every cycle so quitting reflects the last frame.
  */
 async function loadQuota(
-  providers: ProviderId[],
+  flags: QuotaFlags,
   options: ProviderOptions,
   live: boolean,
 ): Promise<QuotaAxiResponse> {
-  const response = await fetchQuota(providers, options);
+  const response = await fetchQuota(flags.providers, options, flags.adapters);
   const allFailed = response.providers.every(isFailed);
   if (allFailed) process.exitCode = 1;
   else if (live) process.exitCode = undefined;
@@ -245,7 +245,7 @@ export async function modelsCommand(
     allowKeychainPrompt: flags.allowKeychainPrompt,
     refreshCredentials: !flags.noCredentialRefresh,
   };
-  const quota = await fetchQuota(flags.providers, options);
+  const quota = await fetchQuota(flags.providers, options, flags.adapters);
   writeCachedProvidersBestEffort(quota.providers);
   const response = createModelsResponse(quota, {
     ...(flags.intelligence ? { intelligence: flags.intelligence } : {}),
@@ -297,7 +297,7 @@ export async function authCommand(
     refreshCredentials: false,
   };
 
-  const reports = await inspectAuth(flags.providers, options);
+  const reports = await inspectAuth(flags.providers, options, flags.adapters);
   return flags.json
     ? JSON.stringify(
         {
@@ -339,8 +339,8 @@ function validateClaudeInference(flags: QuotaFlags): void {
 export async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
+  adapters: Record<ProviderId, ProviderAdapter>,
 ): Promise<QuotaAxiResponse> {
-  const adapters = loadProviderAdapters();
   const fetched = (
     await Promise.all(
       providers.map((provider) =>
@@ -365,8 +365,8 @@ export async function fetchQuota(
 async function inspectAuth(
   providers: ProviderId[],
   options: ProviderOptions,
+  adapters: Record<ProviderId, ProviderAdapter>,
 ): Promise<AuthProviderReport[]> {
-  const adapters = loadProviderAdapters();
   const reports = (
     await Promise.all(
       providers.map((provider) =>

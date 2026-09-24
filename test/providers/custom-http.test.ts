@@ -100,6 +100,28 @@ describe("custom HTTP provider", () => {
     ).toThrow("reset_anchor_required");
   });
 
+  it("rejects multi-day windows whose configured reset anchor is absent from the record", () => {
+    expect(() =>
+      normalizeCustomHttpPayload(
+        {
+          ...exampleConfig(),
+          reset: { lastResetField: "budget_reset_at", durationDays: 7 },
+        },
+        {
+          usage: {
+            users: [{ email: "owner@example.com", daily_spend_eur: 5 }],
+          },
+          limits: {
+            highClassSpendingCutoffEur: 10,
+            fullSpendingCutoffEur: 20,
+          },
+        },
+        Date.parse("2026-09-24T12:00:00Z"),
+        { QUOTA_AXI_EXAMPLE_USER: "owner@example.com" },
+      ),
+    ).toThrow("reset_anchor_required");
+  });
+
   it("rejects zero-missing owner records when a window needs a nested record", () => {
     const file = writeConfig({
       customHttpProviders: [

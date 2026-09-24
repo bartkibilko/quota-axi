@@ -202,45 +202,16 @@ function customHttpSemantics(
   provider: ProviderQuota,
   generatedAt: string,
 ): QuotaSemantics {
-  const bindings = provider.customScopeBindings ?? {};
   const byId = new Map(provider.windows.map((window) => [window.id, window]));
-  const effectiveAvailability: EffectiveAvailability[] = [];
-  const unresolvedWindowIds: string[] = [];
-  const bound = new Set<string>();
-  for (const [scope, windowIds] of Object.entries(bindings)) {
-    const windows: QuotaWindow[] = [];
-    const missing: string[] = [];
-    for (const id of windowIds) {
-      const window = byId.get(id);
-      if (window) {
-        windows.push(window);
-        bound.add(id);
-      } else {
-        missing.push(id);
-      }
-    }
-    if (windows.length > 0) {
-      effectiveAvailability.push(
-        missing.length > 0
-          ? unresolvedAvailability(scope, windows, missing)
-          : availability(scope, windows, generatedAt),
-      );
-    }
-    unresolvedWindowIds.push(...missing);
-  }
-  for (const window of provider.windows) {
-    if (!bound.has(window.id)) unresolvedWindowIds.push(window.id);
-  }
-  const uniqueUnresolved = [...new Set(unresolvedWindowIds)];
-  if (uniqueUnresolved.length > 0) {
-    return {
-      status: effectiveAvailability.length > 0 ? "partial" : "unknown",
-      description:
-        "This custom HTTP spend provider reports configured spend windows. Unbound or missing configured windows are left unresolved rather than folded into a scope.",
-      effectiveAvailability,
-      unresolvedWindowIds: uniqueUnresolved,
-    };
-  }
+  const effectiveAvailability = Object.entries(
+    provider.customScopeBindings ?? {},
+  ).map(([scope, windowIds]) =>
+    availability(
+      scope,
+      windowIds.flatMap((id) => byId.get(id) ?? []),
+      generatedAt,
+    ),
+  );
   return knownSemantics(
     effectiveAvailability,
     "This custom HTTP spend provider treats each configured scope as bounded by the configured spend windows for that scope.",

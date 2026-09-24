@@ -182,7 +182,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     expect(response.providers).toHaveLength(1);
     expect(response.providers[0]).toMatchObject({
       source: "pi:openai-codex-work",
@@ -286,7 +292,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     expect(response.schemaVersion).toBe(6);
     expect(response.providers.map((provider) => provider.accountKey)).toEqual([
       "openai-codex",
@@ -375,7 +387,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     expect(response.providers[0]?.windows[0]?.percentUsed).toBe(100);
     expect(response.providers[1]?.windows[0]?.percentUsed).toBe(10);
     const remaining = response.providers.map(
@@ -408,7 +426,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     const json = quotaJsonReport(response, true);
     expect(json.providers[0]?.account?.email).toBeUndefined();
     expect(json.providers[0]?.account?.accountId).toBeUndefined();
@@ -597,7 +621,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     expect(response.providers).toHaveLength(1);
     expect(response.providers[0]).toMatchObject({
       accountKey: "openai-codex-work",
@@ -632,7 +662,13 @@ describe("Codex Pi sibling account lanes", () => {
     });
 
     const { fetchQuota } = await import("../../src/commands.js");
-    const response = await fetchQuota(["codex"], OPTIONS);
+    const { loadProviderAdapters } =
+      await import("../../src/providers/index.js");
+    const response = await fetchQuota(
+      ["codex"],
+      OPTIONS,
+      loadProviderAdapters(),
+    );
     expect(response.providers).toHaveLength(1);
     expect(response.providers[0]).toMatchObject({
       accountKey: "openai-codex-work",
@@ -1895,7 +1931,8 @@ async function expectPublishedMembership(
   stubUsageByToken(responses);
 
   const { fetchQuota } = await import("../../src/commands.js");
-  const response = await fetchQuota(["codex"], OPTIONS);
+  const { loadProviderAdapters } = await import("../../src/providers/index.js");
+  const response = await fetchQuota(["codex"], OPTIONS, loadProviderAdapters());
   const json = quotaJsonReport(response, false);
   expect(json.schemaVersion).toBe(
     expected.some((row) => row.accountKey) ? 6 : 5,
@@ -1963,8 +2000,9 @@ async function readCodexLanes() {
 async function cacheCodexRead() {
   vi.resetModules();
   const { fetchQuota } = await import("../../src/commands.js");
+  const { loadProviderAdapters } = await import("../../src/providers/index.js");
   const { writeCachedProviders } = await import("../../src/cache.js");
-  const response = await fetchQuota(["codex"], OPTIONS);
+  const response = await fetchQuota(["codex"], OPTIONS, loadProviderAdapters());
   writeCachedProviders(response.providers);
   return response.providers;
 }
@@ -1972,7 +2010,11 @@ async function cacheCodexRead() {
 async function publishedCodexRows(options: ProviderOptions = OPTIONS) {
   vi.resetModules();
   const { fetchQuota } = await import("../../src/commands.js");
-  return quotaJsonReport(await fetchQuota(["codex"], options), false).providers;
+  const { loadProviderAdapters } = await import("../../src/providers/index.js");
+  return quotaJsonReport(
+    await fetchQuota(["codex"], options, loadProviderAdapters()),
+    false,
+  ).providers;
 }
 
 function writeNativeAuth(accessToken: string, accountId?: string): void {

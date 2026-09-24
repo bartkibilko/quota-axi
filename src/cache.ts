@@ -302,7 +302,6 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     (a, b) =>
       providerSortIndex(a.snapshot.provider) -
         providerSortIndex(b.snapshot.provider) ||
-      a.snapshot.provider.localeCompare(b.snapshot.provider) ||
       (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
         b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
       ),
@@ -738,8 +737,7 @@ function cachedSource(value: unknown): ProviderSource | undefined {
 }
 
 function providerSortIndex(provider: ProviderId): number {
-  const index = PROVIDER_IDS.indexOf(provider as (typeof PROVIDER_IDS)[number]);
-  return index >= 0 ? index : PROVIDER_IDS.length;
+  return PROVIDER_IDS.indexOf(provider as (typeof PROVIDER_IDS)[number]);
 }
 
 function literalValue<const T extends readonly string[]>(
