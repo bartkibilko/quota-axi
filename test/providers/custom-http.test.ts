@@ -122,6 +122,34 @@ describe("custom HTTP provider", () => {
     ).toThrow("reset_anchor_required");
   });
 
+  it("requires every window to declare its spend currency", () => {
+    const { currency: _currency, ...window } = exampleConfig().windows[0];
+    const file = writeConfig({
+      customHttpProviders: [{ ...exampleConfig(), windows: [window] }],
+    });
+
+    expect(() => readCustomHttpProviderConfigs(file)).toThrow(
+      "customHttpProviders[0].windows[0] currency_or_currency_field_required",
+    );
+  });
+
+  it("rejects an unparseable config file instead of dropping custom providers", async () => {
+    process.env.XDG_CONFIG_HOME = mkdtempSync(
+      join(tmpdir(), "quota-axi-custom-http-"),
+    );
+    tempDir = process.env.XDG_CONFIG_HOME;
+    const file = userConfigFilePath();
+    mkdirSync(join(tempDir, "quota-axi"));
+    writeFileSync(file, '{ "customHttpProviders": [], }\n');
+
+    await expect(
+      quotaCommand(["--provider", "custom:example"], { binPath: "quota-axi" }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringContaining(`${file} invalid_json`),
+    });
+  });
+
   it("rejects zero-missing owner records when a window needs a nested record", () => {
     const file = writeConfig({
       customHttpProviders: [

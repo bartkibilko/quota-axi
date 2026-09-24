@@ -98,21 +98,26 @@ export function readCustomHttpProviderConfigs(
     }
     raw = readFileSync(file, "utf8");
   } catch (error) {
-    if (error instanceof Error && error.message === "config_too_large") {
-      throw new Error(`invalid ${CONFIG_KEY} config: config_too_large`, {
-        cause: error,
-      });
-    }
-    return [];
+    const code =
+      error instanceof Error && error.message === "config_too_large"
+        ? "config_too_large"
+        : "config_unreadable";
+    throw new Error(`invalid ${CONFIG_KEY} config: ${file} ${code}`, {
+      cause: error,
+    });
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return [];
+  } catch (error) {
+    throw new Error(`invalid ${CONFIG_KEY} config: ${file} invalid_json`, {
+      cause: error,
+    });
   }
   const root = objectValue(parsed);
-  if (!root) return [];
+  if (!root) {
+    throw new Error(`invalid ${CONFIG_KEY} config: ${file} root_not_object`);
+  }
   const value = root[CONFIG_KEY];
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
@@ -393,11 +398,13 @@ function currencyValue(
   limits: unknown,
 ): string {
   if (config.currency) return config.currency;
-  if (!config.currencyField) return "USD";
   const source =
     config.limitSource ?? (limits === undefined ? "usage" : "limits");
   const record = source === "usage" ? usageRecord : objectValue(limits);
-  const value = record ? getPath(record, config.currencyField) : undefined;
+  const value =
+    record && config.currencyField
+      ? getPath(record, config.currencyField)
+      : undefined;
   if (typeof value !== "string" || !CURRENCY.test(value)) {
     throw new CustomHttpError("invalid_currency");
   }
@@ -650,7 +657,7 @@ function normalizeWindowConfig(
     data.currencyField === undefined
       ? undefined
       : requiredPath(data.currencyField, `${path}.currencyField`);
-  if (currency !== undefined && currencyField !== undefined) {
+  if ((currency === undefined) === (currencyField === undefined)) {
     throw configError(path, "currency_or_currency_field_required");
   }
   return {
@@ -844,8 +851,5 @@ function errorCode(error: unknown): string {
     error.message.startsWith(`invalid ${CONFIG_KEY}`)
   )
     return error.message;
-  if (error instanceof Error && error.message === "config_too_large") {
-    return "config_too_large";
-  }
   return "provider_read_failed";
 }
