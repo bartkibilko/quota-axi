@@ -1,10 +1,11 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
-import { parseProviders, supportedProviderIds } from "./providers/index.js";
+import { parseProviders } from "./providers/index.js";
 import {
   type IntelligenceBucket,
   type ModelSortKey,
   type ProviderId,
+  PROVIDER_IDS,
 } from "./types.js";
 
 export type QuotaFlags = {
@@ -308,10 +309,12 @@ function parseProviderScope(
   values: readonly string[],
   defaultProviders?: readonly ProviderId[],
 ): ProviderId[] {
-  if (values.length === 0) {
-    return defaultProviders ? [...defaultProviders] : parseProviders(undefined);
-  }
   try {
+    if (values.length === 0) {
+      return defaultProviders
+        ? [...defaultProviders]
+        : parseProviders(undefined);
+    }
     const seen = new Set<ProviderId>();
     const providers: ProviderId[] = [];
     for (const value of values) {
@@ -331,7 +334,9 @@ function parseProviderScope(
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      [`Supported providers: ${supportedProviderIds().join(", ")}`],
+      [
+        `Supported providers: ${PROVIDER_IDS.join(", ")}, plus configured custom:* providers`,
+      ],
     );
   }
 }

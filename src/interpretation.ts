@@ -209,22 +209,24 @@ function customHttpSemantics(
   const bound = new Set<string>();
   for (const [scope, windowIds] of Object.entries(bindings)) {
     const windows: QuotaWindow[] = [];
+    const missing: string[] = [];
     for (const id of windowIds) {
       const window = byId.get(id);
       if (window) {
         windows.push(window);
         bound.add(id);
       } else {
-        unresolvedWindowIds.push(id);
+        missing.push(id);
       }
     }
     if (windows.length > 0) {
       effectiveAvailability.push(
-        unresolvedWindowIds.length > 0
-          ? unresolvedAvailability(scope, windows, unresolvedWindowIds)
+        missing.length > 0
+          ? unresolvedAvailability(scope, windows, missing)
           : availability(scope, windows, generatedAt),
       );
     }
+    unresolvedWindowIds.push(...missing);
   }
   for (const window of provider.windows) {
     if (!bound.has(window.id)) unresolvedWindowIds.push(window.id);
@@ -235,18 +237,7 @@ function customHttpSemantics(
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
       description:
         "This custom HTTP spend provider reports configured spend windows. Unbound or missing configured windows are left unresolved rather than folded into a scope.",
-      effectiveAvailability:
-        uniqueUnresolved.length > 0
-          ? effectiveAvailability.map((entry) =>
-              unresolvedAvailability(
-                entry.scope,
-                provider.windows.filter((window) =>
-                  entry.boundedBy.includes(window.id),
-                ),
-                uniqueUnresolved,
-              ),
-            )
-          : effectiveAvailability,
+      effectiveAvailability,
       unresolvedWindowIds: uniqueUnresolved,
     };
   }

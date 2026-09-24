@@ -42,6 +42,86 @@ describe("custom HTTP provider", () => {
     );
   });
 
+  it("rejects reset keys that would imply unsupported local-time semantics", () => {
+    const file = writeConfig({
+      customHttpProviders: [
+        {
+          ...exampleConfig(),
+          reset: {
+            ...exampleConfig().reset,
+            timezone: "UTC",
+          },
+        },
+      ],
+    });
+
+    expect(() => readCustomHttpProviderConfigs(file)).toThrow(
+      "customHttpProviders[0].reset.timezone unknown_key",
+    );
+  });
+
+  it("rejects multi-day windows without an explicit reset anchor", () => {
+    const file = writeConfig({
+      customHttpProviders: [
+        {
+          ...exampleConfig(),
+          reset: {
+            durationDays: 7,
+          },
+        },
+      ],
+    });
+
+    expect(() => readCustomHttpProviderConfigs(file)).toThrow(
+      "customHttpProviders[0].reset duration_requires_last_reset_field",
+    );
+  });
+
+  it("rejects duration fields that resolve to multi-day without a reset anchor", () => {
+    expect(() =>
+      normalizeCustomHttpPayload(
+        {
+          ...exampleConfig(),
+          reset: { durationDaysField: "spendingWindowDays" },
+        },
+        {
+          usage: {
+            users: [{ email: "owner@example.com", daily_spend_eur: 5 }],
+          },
+          limits: {
+            spendingWindowDays: 7,
+            highClassSpendingCutoffEur: 10,
+            fullSpendingCutoffEur: 20,
+          },
+        },
+        Date.parse("2026-09-24T12:00:00Z"),
+        { QUOTA_AXI_EXAMPLE_USER: "owner@example.com" },
+      ),
+    ).toThrow("reset_anchor_required");
+  });
+
+  it("rejects zero-missing owner records when a window needs a nested record", () => {
+    const file = writeConfig({
+      customHttpProviders: [
+        {
+          ...exampleConfig(),
+          missingRecord: "zero",
+          windows: [
+            {
+              ...exampleConfig().windows[0],
+              recordPath: "windows",
+              selector: { field: "class", value: "total" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(() => readCustomHttpProviderConfigs(file)).toThrow(
+      "customHttpProviders[0].windows[0].recordPath unsupported_with_missing_record_zero",
+    );
+  });
+
   it("normalizes only the selected owner's spend windows", async () => {
     const request = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -271,6 +351,23 @@ describe("custom HTTP provider", () => {
       ],
     });
   });
+
+  it("surfaces malformed custom provider config as a validation error", async () => {
+    process.env.XDG_CONFIG_HOME = mkdtempSync(
+      join(tmpdir(), "quota-axi-custom-http-"),
+    );
+    tempDir = process.env.XDG_CONFIG_HOME;
+    writeConfigFile({
+      customHttpProviders: [{ ...exampleConfig(), id: "bad" }],
+    });
+
+    await expect(
+      quotaCommand(["--provider", "custom:example"], { binPath: "quota-axi" }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringContaining("invalid_custom_id"),
+    });
+  });
 });
 
 function exampleConfig(): CustomHttpProviderConfig {
@@ -285,9 +382,6 @@ function exampleConfig(): CustomHttpProviderConfig {
       valueEnv: "QUOTA_AXI_EXAMPLE_USER",
     },
     reset: {
-      type: "daily",
-      time: "00:00",
-      timezone: "UTC",
       lastResetField: "daily_last_reset_time",
       durationDaysField: "spendingWindowDays",
     },

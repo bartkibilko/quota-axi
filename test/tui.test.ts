@@ -145,6 +145,49 @@ describe("renderQuotaTui structure", () => {
     expect(findCardLine(lines, 0, "97% session")).toBeDefined();
   });
 
+  it("renders a custom provider card under color output", () => {
+    const response: QuotaAxiResponse = {
+      generatedAt: GENERATED_AT,
+      providers: [
+        withQuotaSemantics(
+          {
+            provider: "custom:example",
+            label: "Example HTTP Spend",
+            source: "api",
+            windows: [
+              {
+                id: "daily_total",
+                label: "daily total",
+                kind: "credits",
+                percentUsed: 25,
+                percentRemaining: 75,
+                startsAt: "2026-08-06T00:00:00.000Z",
+                resetsAt: "2026-08-07T00:00:00.000Z",
+                windowSeconds: 86_400,
+              },
+            ],
+            customScopeBindings: { all_models: ["daily_total"] },
+            state: {
+              status: "fresh",
+              stale: false,
+              refreshedAt: GENERATED_AT,
+              sourcesTried: ["custom-http"],
+            },
+          },
+          GENERATED_AT,
+        ),
+      ],
+    };
+
+    const output = renderQuotaTui(response, {
+      colorDepth: "16",
+      timeZone: "America/Los_Angeles",
+    });
+
+    expect(stripAnsi(output)).toContain("custom:example");
+    expect(output).toContain("\x1b[");
+  });
+
   it("uses the mapped headline window's reset marker instead of another window's runway", () => {
     for (const [mappedId, otherId] of [
       ["five_hour", "seven_day"],

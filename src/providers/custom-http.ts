@@ -44,9 +44,6 @@ export type CustomHttpSelectorConfig = {
 };
 
 export type CustomHttpResetConfig = {
-  type: "daily";
-  time: "00:00";
-  timezone: "UTC";
   lastResetField?: string;
   durationDaysField?: string;
   durationDays?: number;
@@ -362,6 +359,7 @@ function selectWindowRecord(
   environment: Record<string, string | undefined>,
 ): SelectedRecord {
   if (!config.recordPath) return owner;
+  if (owner[SYNTHETIC_ZERO_RECORD] === true) return owner;
   const nested = getPath(owner, config.recordPath);
   if (!Array.isArray(nested))
     throw new CustomHttpError("window_records_not_array");
@@ -423,6 +421,9 @@ function resetWindow(
       : 1);
   if (!Number.isInteger(durationDays) || durationDays <= 0) {
     throw new CustomHttpError("invalid_reset_duration");
+  }
+  if (durationDays > 1 && !config.reset.lastResetField) {
+    throw new CustomHttpError("reset_anchor_required");
   }
   const windowSeconds = durationDays * 86_400;
   const fieldValue = config.reset.lastResetField
@@ -549,6 +550,30 @@ function normalizeProviderConfig(
     windowIds.add(normalized.id);
     return normalized;
   });
+  if (missingRecord === "zero") {
+    for (const [index, window] of windows.entries()) {
+      const limitSource =
+        window.limitSource ?? (limitsUrl === undefined ? "usage" : "limits");
+      if (window.recordPath) {
+        throw configError(
+          `${path}.windows[${index}].recordPath`,
+          "unsupported_with_missing_record_zero",
+        );
+      }
+      if (window.limitValue === undefined && limitSource === "usage") {
+        throw configError(
+          `${path}.windows[${index}].limitSource`,
+          "unsupported_with_missing_record_zero",
+        );
+      }
+      if (window.currencyField && limitSource !== "limits") {
+        throw configError(
+          `${path}.windows[${index}].currencyField`,
+          "usage_currency_unsupported_with_missing_record_zero",
+        );
+      }
+    }
+  }
   return {
     id: id as CustomProviderId,
     label,
@@ -672,22 +697,12 @@ function normalizeSelector(
 
 function normalizeReset(raw: unknown, path: string): CustomHttpResetConfig {
   assertKnownKeys(raw, path, [
-    "type",
-    "time",
-    "timezone",
     "lastResetField",
     "durationDaysField",
     "durationDays",
   ]);
   const data = objectValue(raw);
   if (!data) throw configError(path, "not_object");
-  const type = optionalLiteral(data.type, ["daily"] as const, `${path}.type`);
-  const time = optionalLiteral(data.time, ["00:00"] as const, `${path}.time`);
-  const timezone = optionalLiteral(
-    data.timezone,
-    ["UTC"] as const,
-    `${path}.timezone`,
-  );
   const lastResetField =
     data.lastResetField === undefined
       ? undefined
@@ -703,10 +718,10 @@ function normalizeReset(raw: unknown, path: string): CustomHttpResetConfig {
   if (durationDays !== undefined && durationDaysField !== undefined) {
     throw configError(path, "duration_days_or_field_required");
   }
+  if (durationDays !== undefined && durationDays > 1 && !lastResetField) {
+    throw configError(path, "duration_requires_last_reset_field");
+  }
   return {
-    type: type ?? "daily",
-    time: time ?? "00:00",
-    timezone: timezone ?? "UTC",
     ...(lastResetField ? { lastResetField } : {}),
     ...(durationDaysField ? { durationDaysField } : {}),
     ...(durationDays !== undefined ? { durationDays } : {}),

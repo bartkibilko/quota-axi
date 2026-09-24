@@ -360,9 +360,6 @@ Add `customHttpProviders` to `~/.config/quota-axi/config.json`, or `$XDG_CONFIG_
         "valueEnv": "QUOTA_AXI_EXAMPLE_USER"
       },
       "reset": {
-        "type": "daily",
-        "time": "00:00",
-        "timezone": "UTC",
         "lastResetField": "daily_last_reset_time",
         "durationDaysField": "spendingWindowDays"
       },
@@ -397,9 +394,9 @@ Then run:
 QUOTA_AXI_EXAMPLE_USER=owner@example.com quota-axi --provider custom:example
 ```
 
-The schema is deliberately small and strict. Provider ids must start with `custom:`; URLs must be `http` or `https`; each provider must select one owner record from `recordsPath` by matching `ownerSelector.field` against either `value` or an environment variable named by `valueEnv`; windows read numeric `spendField` values from that selected record and a numeric limit from either the usage record or `limitsUrl`; scopes are bound by the window ids named in their `scopes` arrays. Unknown keys and malformed custom-provider config produce a validation error instead of being ignored.
+The schema is deliberately small and strict. Provider ids must start with `custom:`; URLs must be `http` or `https`; each provider must select one owner record from `recordsPath` by matching `ownerSelector.field` against either `value` or an environment variable named by `valueEnv`; windows read numeric `spendField` values from that selected record and a numeric limit from either the usage record or `limitsUrl`; scopes are bound by the window ids named in their `scopes` arrays. `reset.lastResetField` anchors the start of the current window, and `durationDays` or `durationDaysField` may extend it; without `lastResetField`, quota-axi uses the current UTC midnight as a one-day fallback only. Unknown keys and malformed custom-provider config produce a validation error instead of being ignored.
 
-Custom HTTP providers never send credentials, headers, or request bodies. Response bodies are bounded like native provider responses, and quota-axi serializes only the selected owner's normalized windows plus configured scope bindings. It does not print, cache, or store other records from a roster response, and examples should use synthetic data such as `example.com`.
+Custom HTTP providers never send credentials, headers, or request bodies. Response bodies are bounded like native provider responses, and quota-axi serializes only the selected owner's normalized windows plus configured scope bindings into the live report. It does not cache custom HTTP readings, print or store other records from a roster response, or include private examples in the repository; examples should use synthetic data such as `example.com`.
 
 ### Profile-only quota reads
 
