@@ -2,6 +2,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
+import { traceUnverifiableInput } from "./input-trace.js";
 
 export type ExecFileTextOptions = {
   maxBufferBytes?: number;
@@ -14,6 +15,12 @@ export function execFileText(
   timeoutMs: number,
   optionsOrMaxBuffer: ExecFileTextOptions | number = {},
 ): Promise<string> {
+  // Keychain service/account selectors name stores, not their current login.
+  // Even a missing or blocked item can later supply a different credential
+  // without changing any traced file. Keep snapshots for stale fallback, but
+  // never let a Keychain consultation authorize fresh reuse.
+  if (process.platform === "darwin" && path.basename(command) === "security")
+    traceUnverifiableInput();
   const options =
     typeof optionsOrMaxBuffer === "number"
       ? { maxBufferBytes: optionsOrMaxBuffer }
