@@ -155,7 +155,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 ## 14. MiniMax & MiMo (`minimax`, `mimo`)
 
 - **Endpoints (MiniMax only)**: Balance and quota inspection endpoints. Context-scoped cache via SHA-256 context hashing of credential source and host. Read-only.
-- **MiMo**: `MIMO_API_KEY` alone establishes usable auth; no endpoint is probed (quota display is dashboard/cookie based), nothing is cached, and windows stay empty.
+- **MiMo**: Follow the MiMo entry in [README Provider windows](../../README.md#provider-windows) for environment and Pi credential sources and quota availability.
 
 ---
 
