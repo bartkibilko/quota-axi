@@ -47,7 +47,7 @@ Implemented in `src/pace.ts`:
 Structured into three concise decision blocks:
 
 1. `quota[]`: One fully populated row per measurable scope.
-2. `exhaustion[]`: Sparse block for finite-runway scopes, joined on `provider` + `scope`.
+2. `exhaustion[]`: Sparse block for finite-runway scopes; join columns follow [README Default report blocks](../../README.md#default-report-blocks), including account-expanded reports.
 3. `attention[]`: Sparse block capturing every non-nominal condition (degraded sources, warnings, unmeasurable scopes, soft expiry).
 
 **Core Invariants**:

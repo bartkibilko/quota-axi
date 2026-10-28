@@ -21,21 +21,7 @@ This document details the disk caching architecture, file permissions, context-s
 
 ## Context-Scoped Providers (`CONTEXT_SCOPED_PROVIDERS`)
 
-To prevent cross-account or cross-environment cache poisoning, providers whose identity is configuration-dependent or slot-shared are enrolled in `CONTEXT_SCOPED_PROVIDERS` in `src/cache.ts`:
-
-- **Enrolled Providers**: Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, Muse, and Codex.
-- **Context Identifiers**: Snapshots carry an opaque SHA-256 context identifier derived from the answering configuration:
-  - **Claude**: Hashed profile and credential-storage selection. `claudeCredentialContextId` appends an env marker so environment-token readings cannot be served as stale cache for stored-token accounts.
-  - **Kimi**: Home path plus the slot and base URL resolved from `config.toml` (never the file contents, which contain keys). Prevents mainland China snapshots from serving as global fallbacks.
-  - **Command Code**: Winning source plus the account identity validated by `whoami`.
-  - **MiniMax**: Answering credential source plus deployment host.
-  - **ElevenLabs**: Credential source plus a one-way SHA-256 digest of the answering API key.
-  - **Devin**: Answering source, the first-party host it was sent to, and a one-way SHA-256 digest of the answering API key; the key never enters the cache.
-  - **Muse**: Answering source plus a one-way SHA-256 digest of the credential that answered (the Muse CLI's stored OAuth access token or an exported `META_API_KEY`); a since-refreshed token is a cache miss, never a cross-attribution between accounts.
-  - **Codex**: Hashed ChatGPT account ID stored by the specific credential that produced the reading (resolving collisions between lone discovered lanes and Pi entries).
-- **Fallback Verification**: Stale cache fallback rejects legacy unstamped snapshots or snapshots whose context ID does not match the active configuration.
-- **Codex exception**: Codex stamps are optional at write time, but stale serving requires ownership. `readCachedCodexProvider` withholds an unstamped snapshot, and withholds a snapshot whose stored account id is not among the ids the failed reading's tried credentials actually named; a sibling never probed does not vouch for it, and a transient failure is vouched for only by its own credential. A reading whose tried credentials name no account establishes nothing and is withheld from stale fallback. Contract: [README Cache](../../README.md#cache).
-- **Skip on Unconfirmed**: If a reading cannot confirm context identity (e.g. unreadable configuration), quota-axi skips both writing to cache and clearing the cache slot.
+Use `CONTEXT_SCOPED_PROVIDERS` in `src/cache.ts` for the enrolled providers and their identity functions. Before changing context stamps, stale fallback, or cache write/clear eligibility, follow [README Cache](../../README.md#cache), including the Claude profile, Copilot host, Kimi source, and Codex ownership rules.
 
 ---
 

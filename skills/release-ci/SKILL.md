@@ -43,7 +43,7 @@ This document describes the automated release pipeline, CI workflow constraints,
 
 - **Contributor Workflow**: [CONTRIBUTING.md](../../CONTRIBUTING.md) defines contributor requirements, PR expectations, and exemptions.
 - **Trusted Repository Configuration**:
-  - `.no-mistakes.yaml` defines `commands.prepare` and `commands.test` (`pnpm test`), alongside `test.instructions` for post-baseline live validation.
+  - `.no-mistakes.yaml` defines the baseline commands and post-baseline validation boundaries; follow [CONTRIBUTING Repo conventions](../../CONTRIBUTING.md#repo-conventions).
   - `allow_repo_commands` remains disabled so untrusted pull request branches cannot inject arbitrary commands or agents.
   - Guarded by `test/no-mistakes-config.test.ts`.
 - **Composite Action Pinning**:

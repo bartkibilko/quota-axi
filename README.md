@@ -349,7 +349,7 @@ It is generated from `src/skill.ts` as a minimal stub: discovery frontmatter, wh
 | `--allow-keychain-prompt`                                                                                                                                             | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
 | `--allow-claude-inference`                                                                                                                                            | Spend one bounded native Claude inference to read env-token quota headers                                              |
 | `--no-credential-refresh`                                                                                                                                             | Never run a vendor CLI's own non-interactive credential refresh                                                        |
-| `--max-age 0\|90s\|2m`                                                                                                                                                | Opt in to reusing a fresh reading up to this old instead of asking the vendor; `0` always asks                         |
+| `--max-age 0\|90s\|2m`                                                                                                                                                | Opt in to reusing a fresh reading up to this old instead of asking the vendor; `0` disables fresh reuse                |
 | `--profile-only`                                                                                                                                                      | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
 | `--intelligence high\|medium\|low`                                                                                                                                    | Filter `models` by editorial intelligence bucket                                                                       |
 | `--sort runway`                                                                                                                                                       | Explicitly sort `models` by documented usable-runway evidence                                                          |
@@ -429,8 +429,8 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 A burst of back-to-back reads (a dispatcher that takes a fresh reading per decision, a test run) can trip a vendor's usage-endpoint rate limit and leave the provider unmeasured until the limit clears.
 Fresh reuse lets such a caller serve the last successful reading instead of asking the vendor again.
-It is opt-in: with neither `--max-age` nor `QUOTA_AXI_MAX_AGE`, every `quota` and `models` read asks the vendor.
-`--max-age <duration>` enables it for one call, and `QUOTA_AXI_MAX_AGE=<duration>` enables it for a host; the flag wins, so `--max-age 0` always asks the vendor.
+It is opt-in: with neither `--max-age` nor `QUOTA_AXI_MAX_AGE`, fresh reuse is disabled for `quota` and `models` reads.
+`--max-age <duration>` enables it for one call, and `QUOTA_AXI_MAX_AGE=<duration>` enables it for a host; the flag wins, so `--max-age 0` disables fresh reuse. Provider-specific read bounds still apply, including Muse's [key-endpoint interval](#provider-notes).
 Both accept `0`, bare seconds, or a whole-unit duration up to one hour, and a `QUOTA_AXI_MAX_AGE` that does not parse fails the read with a validation error instead of being ignored.
 Ninety seconds absorbs a burst and moves a five-hour window's elapsed time by half a percent.
 
@@ -444,8 +444,8 @@ A reading is reused only when all of these hold:
 The cache keeps one slot per provider lane, so two profiles that alternate each read the vendor; each still reuses its own reading between switches.
 `--full` is the audit tier and account identity and source attempts are never cached, so `QUOTA_AXI_MAX_AGE` does not reach it; it reuses only when `--max-age` is passed explicitly.
 `--profile-only` never reuses, and readings the cache excludes (Claude native inference and Copilot native secure-store readings) are never reused.
-With reuse enabled, a live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so it never repeats its own previous frame and still reads the vendor at any `--refresh`, unless `--max-age` is passed explicitly.
-Pressing `r` always reads the vendor, because it is an operator asking for a new reading now.
+With reuse enabled, a live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so fresh reuse never repeats its own previous frame unless `--max-age` is passed explicitly.
+Pressing `r` bypasses fresh reuse, because it is an operator asking for a new reading now. Both refresh paths retain the provider-specific read bounds above.
 
 With reuse enabled, processes that miss the cache together make one vendor read per provider and credential selection.
 The first creates a lock file under the cache directory, reads the vendor, and caches that provider's reading before releasing it; the others poll the cache and are answered by that reading through the same checks as any reuse.
@@ -850,11 +850,11 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a C
 
 In default TOON the scalar is the `spendPriority` column of the scope's `quota[]` row - there is no separate `selection[]` block, at any tier, because the column already carries it. An unmeasurable scalar renders the literal `unknown`, never `0`: `0` is exact utilization, a completely different claim.
 
-| Field                   | Meaning                                                                                                                                                                                  |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`                | `known` when at least one bounding window is measurable, every other bound is an untriggered zero-use window, and no [`boundConflict`](#quota-windows) is disclosed; otherwise `unknown` |
-| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                                                                                                                          |
-| `unmeasurableWindowIds` | The bounding windows that blocked the scalar. Present only when a named bound made the scope `unknown`                                                                                   |
+| Field                   | Meaning                                                                                                                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status`                | `known` when at least one bounding window is measurable, every bound is measurable or an untriggered zero-use window, and no [`boundConflict`](#quota-windows) is disclosed; otherwise `unknown` |
+| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                                                                                                                                  |
+| `unmeasurableWindowIds` | The bounding windows that blocked the scalar. Present only when a named bound made the scope `unknown`                                                                                           |
 
 For each bounding window `w` of the scope:
 

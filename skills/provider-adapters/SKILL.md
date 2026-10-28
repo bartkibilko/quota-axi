@@ -12,10 +12,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 
 ## 1. Anthropic Claude (`claude`)
 
-- **Credential Sources** (evaluated in order):
-  1. `env` (`CLAUDE_CODE_OAUTH_TOKEN`): Takes top precedence because Claude Code resolves environment tokens before opening local stores. It has no `expiresAt` or refresh token; never invent either and never route it through delegated refresh. `claudeEnvOauthToken` in `src/lib/claude-profile.ts` is the single reader. `claudeCredentialContextId` includes an env marker to prevent serving stored-credential cache snapshots for environment sessions.
-  2. `oauth-file`: Reads the local profile credentials file.
-  3. `keychain`: macOS Keychain item matching Claude Code's validated user account selector. Ambiguous service-only queries are forbidden. Value reads require an existing non-secret access marker (`0600`) or `--allow-keychain-prompt`. Keychain failures (including exit 44) must never retire the cache.
+- **Credential Sources**: Follow [README Provider credential sources](../../README.md#provider-credential-sources) and the Claude [provider notes](../../README.md#provider-notes) for source selection, Keychain consent, and cache safety. For multiple directories, environment-token ownership, and per-lane refresh eligibility, follow [Claude profiles](../../README.md#claude-profiles); [claude-swap accounts](../../README.md#claude-swap-accounts) has a separate opt-in source contract.
 - **Quota Windows**:
   - Windows can include `five_hour`, `seven_day`, `seven_day_opus`, and `extra_usage`.
   - When the OAuth usage payload includes a `limits` array, that array is authoritative over top-level fields. It exposes active limits, including model-scoped limits (e.g. Fable) via `scope.model.display_name`, assigned window ID `model:<slug>`.
@@ -31,10 +28,7 @@ This reference details the credential sources, endpoint contracts, quota window 
   1. Native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth.
   2. Pi `openai-codex` and any sibling `openai-codex-*` entries in the same Pi `auth.json`.
   3. CLI fallback via the `app-server` JSON-RPC probe.
-- **Multi-Account Lanes**:
-  - `src/providers/accounts.ts` collects distinct Pi entries and the native `codex-home` lane.
-  - Accounts are matched and deduplicated on the ChatGPT account ID reported by the probe/store, never on email or token strings.
-  - If a native reading matches an existing Pi lane account ID, it collapses into that lane, publishing whichever reading is fresher; coalescing never removes the shared `codex-home` cache slot by name, so another account's snapshot cannot be discarded. Contract: [README Multiple accounts](../../README.md#multiple-accounts).
+- **Multi-Account Lanes**: Follow [README Multiple accounts](../../README.md#multiple-accounts) for native/Pi lane discovery, winner selection, and cache isolation, and [Same subscription across sources](../../README.md#same-subscription-across-sources) for shared coalescing.
 - **Authorization Rules**: OAuth access token is authoritative. An expired `id_token` alone must never mark `auth-json` expired or skip the bearer probe. Never send `OPENAI_API_KEY` to ChatGPT quota endpoints.
 - **Bound Conflict**: Codex model windows are metered separately as `additional_rate_limits`/`rateLimitsByLimitId`. If an inherited base weekly window reads zero while a model window retains allowance, quota-axi publishes `effectiveAvailability[].boundConflict` and reports scope `unknown` rather than asserting exhaustion.
 - **Delegated Refresh**: Codex `app-server` JSON-RPC probe acts as both CLI fallback and delegated refresh.
@@ -86,10 +80,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 
 ## 6. Moonshot Kimi (`kimi`)
 
-- **Quota Windows**:
-  - `/usages` returns a map (`limit_5h`, `limit_7d`, `limit_month_total`, `limit_month_code`) or legacy `usage` + `limits[]`. Ratios are read strictly from `used_ratio`.
-  - `limit_month_code` is the code-typed share of `limit_month_total`, not a separate cap. It carries `percentUsed` and `shareOf: month_total`. It never bounds a scope or derives a remaining allowance. Default TOON formats it as an attention `share` row; TUI displays percent used of parent.
-  - Any declared entry lacking a usable ratio is marked in `state.untrustedWindowIds` (`usages:<key>`), degrading the bound to `partial`.
+- **Quota Windows**: Follow Kimi's [README Provider windows](../../README.md#provider-windows) contract for `/usages` shapes, reconciliation when both shapes appear, partial readings, and used-share windows.
 - **Dual Deployment Environments**:
   - `src/providers/kimi-code-config.ts` reads `config.toml` (`storage`, `key`, `oauth_host`, `base_url`).
   - Region allowlist restricts requests to Kimi Code's two official deployments (global vs mainland China). Never pair one deployment's token with another's host origin.

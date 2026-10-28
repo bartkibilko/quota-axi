@@ -44,7 +44,7 @@ export type QuotaFlags = {
   all: boolean;
   /**
    * Oldest successful reading a read may reuse instead of asking the vendor;
-   * `0` always asks. Absent, the caller falls back to {@link MAX_AGE_ENV}.
+   * `0` disables fresh reuse. Absent, the caller falls back to {@link MAX_AGE_ENV}.
    */
   maxAgeSeconds?: number;
   /** `--tui` palette selection; unset defers to `QUOTA_AXI_THEME`, then `dark`. */
@@ -56,8 +56,8 @@ export const MIN_REFRESH_SECONDS = 30;
 export const MAX_REFRESH_SECONDS = 86_400;
 
 /**
- * Fresh reuse is opt-in: with neither `--max-age` nor this variable every
- * read asks the vendor. A host whose consumer polls per decision (a
+ * Fresh reuse is opt-in through `--max-age` or this variable. Provider-specific
+ * read gates still apply. A host whose consumer polls per decision (a
  * dispatcher, a test run) sets it once to absorb bursts that would otherwise
  * trip a vendor's usage-endpoint rate limit; the flag wins over it.
  */
