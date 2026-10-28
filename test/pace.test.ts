@@ -420,6 +420,7 @@ describe("computeEffectiveRunway", () => {
             id: "weekly",
             percentUsed: 100,
             percentRemaining: 0,
+            resetsAt: resetsAfter(0.5),
           }),
         ],
         GENERATED_AT,
@@ -429,6 +430,23 @@ describe("computeEffectiveRunway", () => {
       usableRunwaySeconds: 0,
       projectedExhaustedAt: GENERATED_AT,
       limitingWindowId: "weekly",
+    });
+  });
+
+  it("keeps a vendor-reported zero exhausted now when no window reports a reset", () => {
+    expect(
+      computeEffectiveRunway(
+        [
+          window({ id: "balance", percentUsed: 40, percentRemaining: 60 }),
+          window({ id: "credits", percentUsed: 100, percentRemaining: 0 }),
+        ],
+        GENERATED_AT,
+      ),
+    ).toEqual({
+      status: "exhausted_now",
+      usableRunwaySeconds: 0,
+      projectedExhaustedAt: GENERATED_AT,
+      limitingWindowId: "credits",
     });
   });
 
@@ -645,7 +663,7 @@ describe("computeEffectiveRunway", () => {
     });
   });
 
-  it("reports through_reset when every window in scope has not yet triggered", () => {
+  it("keeps a scope whose windows report no reset unknown", () => {
     const fiveHour = window({
       id: "five_hour",
       kind: "session",
@@ -663,8 +681,8 @@ describe("computeEffectiveRunway", () => {
     sevenDay.pace = computeWindowPace(sevenDay, GENERATED_AT);
 
     expect(computeEffectiveRunway([fiveHour, sevenDay], GENERATED_AT)).toEqual({
-      status: "through_reset",
-      projectionConfidence: "established",
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour", "seven_day"],
     });
   });
 
@@ -988,5 +1006,95 @@ describe("summarizeEffectiveSelection", () => {
 
   it("reports unknown without inventing bounds for an empty scope", () => {
     expect(summarizeEffectiveSelection([])).toEqual({ status: "unknown" });
+  });
+
+  it("excludes a not-yet-triggered zero-use window instead of blocking the scalar", () => {
+    // Z.AI shape: the five-hour session window is idle (100% remaining, no
+    // resetsAt from the vendor) while the weekly window is fully measured.
+    const fiveHour = window({
+      id: "five_hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+      // No resetsAt: the clock has not started.
+    });
+    fiveHour.pace = computeWindowPace(fiveHour, GENERATED_AT);
+    expect(fiveHour.pace).toEqual({
+      status: "unknown",
+      reason: "missing_cycle",
+    });
+
+    const weekly = bounded("weekly", 51, {
+      timeRemainingPercent: 40,
+      burnMultiple: 0.5,
+    });
+
+    expect(summarizeEffectiveSelection([fiveHour, weekly])).toEqual({
+      status: "known",
+      [SELECTION_SCALAR_KEY]: 0.775,
+    });
+  });
+
+  it("publishes no scalar when every bound is not yet triggered", () => {
+    const fiveHour = window({
+      id: "five_hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+    });
+    const weekly = window({
+      id: "weekly",
+      kind: "weekly",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+    });
+
+    expect(summarizeEffectiveSelection([fiveHour, weekly])).toEqual({
+      status: "unknown",
+    });
+  });
+
+  it("still fails closed for a missing resetsAt with nonzero or unknown usage", () => {
+    const weekly = bounded("weekly", 80, { timeRemainingPercent: 50 });
+
+    const consumed = window({
+      id: "five_hour",
+      percentUsed: 20,
+      percentRemaining: 80,
+      pace: { status: "unknown", reason: "missing_cycle" },
+    });
+    expect(summarizeEffectiveSelection([consumed, weekly])).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
+    });
+
+    const unknownUsage = window({
+      id: "five_hour",
+      pace: { status: "unknown", reason: "missing_cycle" },
+    });
+    expect(summarizeEffectiveSelection([unknownUsage, weekly])).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
+    });
+  });
+
+  it("fails closed for a malformed resetsAt even at zero usage (not merely missing)", () => {
+    const malformed = window({
+      id: "five_hour",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+      resetsAt: "not-a-timestamp",
+    });
+    malformed.pace = computeWindowPace(malformed, GENERATED_AT);
+    const weekly = bounded("weekly", 80, { timeRemainingPercent: 50 });
+
+    expect(summarizeEffectiveSelection([malformed, weekly])).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
+    });
   });
 });

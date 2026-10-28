@@ -108,10 +108,11 @@ export function computeEffectiveRunway(
   windows: QuotaWindow[],
   generatedAt: string,
 ): EffectiveRunway {
+  const generatedAtMs = Date.parse(generatedAt);
+
   const exhausted = windows.find(
     (window) => finiteNumber(window.percentRemaining) === 0,
   );
-  const generatedAtMs = Date.parse(generatedAt);
 
   if (exhausted) {
     return {
@@ -124,7 +125,19 @@ export function computeEffectiveRunway(
     };
   }
 
-  if (windows.length === 0 || !isRepresentableDateMs(generatedAtMs)) {
+  // No bound reports a reset, so the scope has no current cycle to derive a
+  // reset-implying verdict from: fail closed to `unknown` naming every bound
+  // rather than publishing `through_reset` or a projection. A vendor-reported
+  // zero above still yields `exhausted_now`, which needs no cycle.
+  if (
+    windows.every(
+      (window) => resolveResetsAtOutcome(window.resetsAt).kind === "missing",
+    )
+  ) {
+    return unknownRunway(windows);
+  }
+
+  if (!isRepresentableDateMs(generatedAtMs)) {
     return unknownRunway(windows);
   }
 
@@ -319,7 +332,12 @@ export function summarizeEffectivePace(
  * the window is overdrawn against its reset clock.
  *
  * Any bounding window without usable pace makes the whole scope unmeasurable:
- * an unknown window is never assumed healthy and never defaults to zero.
+ * an unknown window is never assumed healthy and never defaults to zero. The
+ * one exception is a not-yet-triggered window - no `resetsAt` at all plus zero
+ * usage - which is fully available rather than unmeasurable, so it is excluded
+ * from this weighted mean instead of blocking. When every bound is that shape
+ * the scalar is withheld with no blockers named; the runway aggregate withholds
+ * its verdict too but names every bound (README "Effective usable runway").
  */
 export function summarizeEffectiveSelection(
   windows: QuotaWindow[],
@@ -334,7 +352,9 @@ export function summarizeEffectiveSelection(
     const gap = windowSelectionGap(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
     if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
-      unmeasurableWindowIds.push(window.id);
+      if (!isNotYetTriggeredZeroUse(window)) {
+        unmeasurableWindowIds.push(window.id);
+      }
       continue;
     }
     weightedGapSum += gap * cycleSeconds;
@@ -343,6 +363,11 @@ export function summarizeEffectiveSelection(
 
   if (unmeasurableWindowIds.length > 0) {
     return { status: "unknown", unmeasurableWindowIds };
+  }
+  if (cycleSecondsSum <= 0) {
+    // Every bound is a not-yet-triggered zero-use window, so there is no
+    // measurable cycle to weight; the scope publishes no scalar.
+    return { status: "unknown" };
   }
   const scopeMetric = weightedGapSum / cycleSecondsSum;
   if (!Number.isFinite(scopeMetric)) {
@@ -420,6 +445,24 @@ function isZeroUse(window: QuotaWindow, percentRemaining: number): boolean {
   return (
     percentRemaining === 100 && (percentUsed === undefined || percentUsed === 0)
   );
+}
+
+/**
+ * A window whose cycle countdown has not started yet: no `resetsAt` at all
+ * plus zero usage (e.g. a `five_hour` window before its first request). It is
+ * fully available rather than unmeasurable, so it never blocks an aggregate by
+ * itself. A present-but-unparseable `resetsAt` is a data defect, not
+ * "not yet triggered", and still fails closed.
+ */
+function isNotYetTriggeredZeroUse(window: QuotaWindow): boolean {
+  if (resolveResetsAtOutcome(window.resetsAt).kind !== "missing") return false;
+  // A window whose pace resolved knows its cycle, so it is not untriggered;
+  // its own measurability rules still apply.
+  if (window.pace !== undefined && window.pace.status !== "unknown") {
+    return false;
+  }
+  const remaining = finiteNumber(window.percentRemaining);
+  return remaining !== undefined && isZeroUse(window, remaining);
 }
 
 function isProvablyUnopenedFutureCycle(

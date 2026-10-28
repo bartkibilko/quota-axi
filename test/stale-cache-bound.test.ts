@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -11,6 +12,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { copilotCacheContextId } from "../src/cache.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
 
 const BUILT_CLI_ENTRYPOINT = resolve("dist/bin/quota-axi.js");
@@ -79,9 +81,16 @@ function fixture(seed?: { timing: WindowTiming; refreshedAt: string }) {
       tokens: { access_token: "fixture", account_id: "acct-fixture" },
     }),
   );
+  // Linux reads accessToken from this auth file; macOS reads the same path as
+  // identity-only cli-config.json, so authInfo is required for the CLI source
+  // to be present (Keychain-gated) rather than missing. A missing CLI source
+  // is a definitive sign-out and would retire the stale snapshot under test.
   writeFileSync(
     join(root, "cursor-auth.json"),
-    JSON.stringify({ accessToken: "fixture" }),
+    JSON.stringify({
+      accessToken: "fixture",
+      authInfo: { email: "fixture@example.com", userId: "fixture-user" },
+    }),
   );
   writeFileSync(
     join(root, "apps.json"),
@@ -127,22 +136,30 @@ function fixture(seed?: { timing: WindowTiming; refreshedAt: string }) {
             label: "credits",
             kind: "credits",
           }),
-          snapshot("codex", "Codex", "oauth", {
-            id: "weekly",
-            label: "week",
-            kind: "weekly",
-            windowSeconds: 604_800,
-          }),
+          {
+            ...snapshot("codex", "Codex", "oauth", {
+              id: "weekly",
+              label: "week",
+              kind: "weekly",
+              windowSeconds: 604_800,
+            }),
+            credentialContext: createHash("sha256")
+              .update(JSON.stringify(["codex-account-v1", "acct-fixture"]))
+              .digest("hex"),
+          },
           snapshot("cursor", "Cursor", "api", {
             id: "included_usage",
             label: "included_usage",
             kind: "monthly",
           }),
-          snapshot("copilot", "GitHub Copilot", "api", {
-            id: "premium_interactions",
-            label: "premium_interactions",
-            kind: "monthly",
-          }),
+          {
+            ...snapshot("copilot", "GitHub Copilot", "api", {
+              id: "premium_interactions",
+              label: "premium_interactions",
+              kind: "monthly",
+            }),
+            credentialContext: copilotCacheContextId("github.com"),
+          },
           snapshot("zai", "Z.AI", "api", {
             id: "weekly",
             label: "weekly",

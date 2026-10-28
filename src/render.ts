@@ -161,6 +161,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       ...providerAttention(provider, measured, scopeAttention.length),
     );
     blocks.attention.push(...shareRows(provider));
+    blocks.attention.push(...jobRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -234,6 +235,20 @@ function shareRows(provider: ProviderQuota): AttentionRow[] {
     }));
 }
 
+function jobRows(provider: ProviderQuota): AttentionRow[] {
+  const jobs = provider.jobs;
+  if (!jobs) return [];
+  return [
+    {
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "jobs",
+      detail: `sampled ${jobs.sampled}${DETAIL_SEPARATOR}completed ${jobs.completed}${DETAIL_SEPARATOR}failed ${jobs.failed}${DETAIL_SEPARATOR}other ${jobs.other}`,
+      remedy: NONE,
+    },
+  ];
+}
+
 function shareDetail(window: QuotaWindow): string {
   const relationship = `${window.id} of ${window.shareOf}`;
   return window.percentUsed === undefined
@@ -265,6 +280,15 @@ function providerStateRows(
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
   if (primary) rows.push(primary);
+  if (provider.state.reused) {
+    rows.push({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "reused",
+      detail: `last refreshed ${provider.state.refreshedAt ?? UNKNOWN}`,
+      remedy: NONE,
+    });
+  }
   const unresolved = joinIds(provider.quotaSemantics?.unresolvedWindowIds);
   if (unresolved) {
     rows.push({
@@ -479,12 +503,26 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       worstReserveWindowId: scope.pace?.worstReserveWindowId ?? UNKNOWN,
     })),
   );
+  const locators = response.providers.some(
+    (provider) => provider.accountLocator,
+  );
   const accounts = response.providers.map((provider) => ({
     ...providerColumns(provider),
     email: provider.account?.email ?? "hidden",
     organization: provider.account?.organization ?? NONE,
     accountId: provider.account?.accountId ?? NONE,
     identityStatus: provider.account?.identityStatus ?? UNKNOWN,
+    ...(locators
+      ? {
+          locatorKind: provider.accountLocator?.kind ?? NONE,
+          locatorPath: provider.accountLocator
+            ? collapseHome(provider.accountLocator.path)
+            : NONE,
+          keychainService: provider.accountLocator?.keychainService ?? NONE,
+          delegateEligible:
+            provider.accountLocator?.delegateEligible ?? UNKNOWN,
+        }
+      : {}),
   }));
   const attempts = response.providers.flatMap((provider) =>
     (provider.attempts ?? []).map((attempt) => attemptRow(provider, attempt)),
@@ -597,6 +635,7 @@ export function redactedResponse(
     providers: response.providers.map((provider) => ({
       ...provider,
       account: undefined,
+      accountLocator: undefined,
       attempts: undefined,
     })),
   };
@@ -627,7 +666,10 @@ export function quotaJsonReport(
         : {}),
       state: {
         ...provider.state,
-        refreshedAt: undefined,
+        // A reused reading's age is load-bearing, so its fetch time stays.
+        refreshedAt: provider.state.reused
+          ? provider.state.refreshedAt
+          : undefined,
         sourcesTried: undefined,
       },
     })),

@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderQuota, SourceAttempt } from "../src/types.js";
+import { providerPresence } from "../src/lib/source-attempts.js";
+import type {
+  AuthProviderReport,
+  ProviderQuota,
+  SourceAttempt,
+} from "../src/types.js";
 
 /**
  * The cross-provider invariant every multi-source adapter has to hold, checked
@@ -21,7 +26,7 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok" | "opencode-go";
+  provider: "codex" | "kimi" | "grok" | "opencode-go" | "mimo";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
@@ -79,6 +84,11 @@ const CASES: PiProviderCase[] = [
     piKey: "opencode-go",
     piSource: "pi:opencode-go",
   },
+  {
+    provider: "mimo",
+    piKey: "xiaomi",
+    piSource: "pi:xiaomi",
+  },
 ];
 
 /** Present-but-unusable Pi entries: none of these is an absent source. */
@@ -104,6 +114,13 @@ const ENV_KEYS = [
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
   "ELEVENLABS_API_KEY",
+  "META_API_KEY",
+  "XDG_CONFIG_HOME",
+  "MIMO_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "OPENROUTER_API_KEY",
+  "MINIMAX_API_KEY",
+  "MMX_CONFIG_DIR",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
@@ -142,6 +159,13 @@ beforeEach(() => {
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
   delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.META_API_KEY;
+  delete process.env.MIMO_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.MINIMAX_API_KEY;
+  process.env.MMX_CONFIG_DIR = join(tempDir, "mmx");
+  process.env.XDG_CONFIG_HOME = join(tempDir, "config");
   delete process.env.WINDSURF_API_KEY;
   delete process.env.WINDSURF_API_SERVER_URL;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
@@ -186,6 +210,14 @@ function stubRejectingApi(): { bearers: string[] } {
 async function readQuota(provider: string): Promise<ProviderQuota> {
   const { PROVIDERS } = await import("../src/providers/index.js");
   return PROVIDERS[provider as keyof typeof PROVIDERS].fetchQuota({
+    allowKeychainPrompt: false,
+    refreshCredentials: false,
+  });
+}
+
+async function readAuth(provider: string): Promise<AuthProviderReport> {
+  const { PROVIDERS } = await import("../src/providers/index.js");
+  return PROVIDERS[provider as keyof typeof PROVIDERS].inspectAuth({
     allowKeychainPrompt: false,
     refreshCredentials: false,
   });
@@ -243,6 +275,239 @@ describe("credential source contract", { timeout: 30_000 }, () => {
         expect(api.bearers).toContain(`Bearer ${expiredProbe.token}`);
       });
     }
+  });
+
+  /**
+   * The env axis of the env-plus-Pi surfaces. An unset or blank variable is
+   * absence; a non-blank value that is not a usable literal secret is a
+   * credential that exists - reported as the invalid credential, never folded
+   * away as "not set up", and never resolved.
+   */
+  describe("mimo env axis", () => {
+    const source = "env:MIMO_API_KEY";
+
+    it("leaves an unset variable unmarked, so nothing reads as degraded", async () => {
+      stubRejectingApi();
+
+      const result = await readQuota("mimo");
+
+      const attempts = attemptsFor(result, source);
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(result.state.status).toBe("auth_required");
+      expect(providerPresence(result)).toBe("absent");
+    });
+
+    it.each([
+      ["an environment reference", "$MIMO_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "mimo-\u0007-fixture"],
+    ])(
+      "marks a present but unusable variable (%s) as a credential that exists",
+      async (_label, value) => {
+        process.env.MIMO_API_KEY = value;
+        stubRejectingApi();
+
+        const result = await readQuota("mimo");
+
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+        expect(result.state).toMatchObject({
+          status: "auth_required",
+          error: "mimo_credential_invalid",
+        });
+        expect(providerPresence(result)).toBe("attention");
+      },
+    );
+  });
+
+  describe.each([
+    ["deepseek", "env:DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY", "pi:deepseek"],
+    [
+      "openrouter",
+      "env:OPENROUTER_API_KEY",
+      "OPENROUTER_API_KEY",
+      "pi:openrouter",
+    ],
+  ])("%s env axis", (provider, source, envVar, piSource) => {
+    const invalidError = `${provider}_credential_invalid`;
+
+    it("leaves an unset variable unmarked, so nothing reads as degraded", async () => {
+      stubRejectingApi();
+
+      const result = await readQuota(provider);
+
+      const attempts = attemptsFor(result, source);
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(result.state.status).toBe("auth_required");
+      expect(providerPresence(result)).toBe("absent");
+    });
+
+    it.each([
+      ["an environment reference", "${" + envVar + "}"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "key-\u0007-fixture"],
+    ])(
+      "reports a present but unusable variable (%s) as the invalid credential",
+      async (_label, value) => {
+        process.env[envVar] = value;
+        stubRejectingApi();
+
+        const result = await readQuota(provider);
+
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.status).toBe("failed");
+          expect(attempt.error).toBe(invalidError);
+          expect(attempt.credentialPresent).toBe(true);
+        }
+        expect(result.state).toMatchObject({
+          status: "auth_required",
+          error: invalidError,
+        });
+        expect(providerPresence(result)).toBe("attention");
+
+        const auth = await readAuth(provider);
+        expect(auth.sources).toContainEqual({
+          source,
+          status: "invalid",
+          error: invalidError,
+          credentialPresent: true,
+        });
+      },
+    );
+
+    it("ranks a present-but-unusable Pi entry above the unset environment variable", async () => {
+      writePiStore({ [provider]: {} });
+      stubRejectingApi();
+
+      const result = await readQuota(provider);
+
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        error: invalidError,
+      });
+      expect(attemptsFor(result, source)).toEqual([
+        {
+          source,
+          status: "skipped",
+          error: `${provider}_credential_unavailable`,
+        },
+      ]);
+      expect(attemptsFor(result, piSource)).toEqual([
+        {
+          source: piSource,
+          status: "failed",
+          error: invalidError,
+          credentialPresent: true,
+        },
+      ]);
+      expect(providerPresence(result)).toBe("attention");
+    });
+  });
+
+  /**
+   * MiniMax keeps its own env-plus-Pi-plus-CLI pipeline instead of routing
+   * through the shared env-plus-Pi helpers, so the same two halves of the
+   * rule are pinned on its env axis directly against the real adapter.
+   */
+  describe("minimax env axis", () => {
+    const source = "env:MINIMAX_API_KEY";
+    const invalidError = "minimax_credential_invalid";
+
+    it("leaves an unset variable unmarked, so nothing reads as degraded", async () => {
+      stubRejectingApi();
+
+      const result = await readQuota("minimax");
+
+      const attempts = attemptsFor(result, source);
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(result.state.status).toBe("auth_required");
+      expect(providerPresence(result)).toBe("absent");
+    });
+
+    it.each([
+      ["an environment reference", "$MINIMAX_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "minimax-\u0007-fixture"],
+    ])(
+      "marks a present but unusable variable (%s) as a credential that exists",
+      async (_label, value) => {
+        process.env.MINIMAX_API_KEY = value;
+        const api = stubRejectingApi();
+
+        const result = await readQuota("minimax");
+
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.status).toBe("failed");
+          expect(attempt.error).toBe(invalidError);
+          expect(attempt.credentialPresent).toBe(true);
+        }
+        expect(result.state).toMatchObject({
+          status: "auth_required",
+          error: invalidError,
+        });
+        expect(providerPresence(result)).toBe("attention");
+        expect(api.bearers).toEqual([]);
+
+        const auth = await readAuth("minimax");
+        expect(auth.sources).toContainEqual({
+          source,
+          status: "invalid",
+          error: invalidError,
+          credentialPresent: true,
+        });
+      },
+    );
+
+    it("ranks a present-but-unusable Pi entry above the unset environment variable", async () => {
+      writePiStore({ minimax: {} });
+      stubRejectingApi();
+
+      const result = await readQuota("minimax");
+
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        error: invalidError,
+      });
+      expect(attemptsFor(result, source)).toEqual([
+        {
+          source,
+          status: "skipped",
+          error: "minimax_credential_unavailable",
+        },
+      ]);
+      expect(attemptsFor(result, "pi:minimax")).toEqual([
+        {
+          source: "pi:minimax",
+          status: "failed",
+          error: invalidError,
+          credentialPresent: true,
+        },
+      ]);
+      expect(attemptsFor(result, "minimax:config.json")).toEqual([
+        {
+          source: "minimax:config.json",
+          status: "skipped",
+          error: "minimax_credential_unavailable",
+        },
+      ]);
+      expect(providerPresence(result)).toBe("attention");
+    });
   });
 
   /**
@@ -610,6 +875,141 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       expect(api.keys).toEqual(["devin-probe-fixture"]);
       expect(bearers).toEqual([""]);
       expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  /**
+   * Muse has three sources: the Muse CLI's own `auth.json` login, the macOS
+   * Keychain item its `storage: "keychain"` records point to, and an exported
+   * `META_API_KEY`. An absent store is not a degraded one, a present but
+   * unusable one is a credential that exists, and nothing unusable - nor the
+   * store's refresh token - is ever sent.
+   */
+  describe("muse", () => {
+    const store = "muse:auth.json";
+    const env = "env:META_API_KEY";
+
+    /**
+     * Pin the platform off macOS so the Keychain source resolves absent and a
+     * developer machine's real Muse login cannot answer these reads.
+     */
+    async function readQuotaAsLinux(): Promise<ProviderQuota> {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        return await readQuota("muse");
+      } finally {
+        if (descriptor) Object.defineProperty(process, "platform", descriptor);
+      }
+    }
+
+    function writeMuseStore(contents: unknown): void {
+      const dir = join(process.env.XDG_CONFIG_HOME!, "muse");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "auth.json"), JSON.stringify(contents), {
+        mode: 0o600,
+      });
+    }
+
+    /** Records every request, so "never sent" is checked rather than assumed. */
+    function stubRejectingKeyEndpoint(): { requests: string[] } {
+      const requests: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          requests.push(
+            JSON.stringify([
+              new Headers(init?.headers).get("authorization"),
+              init?.body,
+            ]),
+          );
+          return new Response(null, { status: 401 });
+        }),
+      );
+      return { requests };
+    }
+
+    it("leaves absent sources unmarked, and sends nothing", async () => {
+      const api = stubRejectingKeyEndpoint();
+
+      const result = await readQuotaAsLinux();
+
+      for (const source of [store, env]) {
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts)
+          expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(api.requests).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it("never sends a blank META_API_KEY", async () => {
+      process.env.META_API_KEY = "   ";
+      const api = stubRejectingKeyEndpoint();
+
+      const result = await readQuotaAsLinux();
+
+      expect(api.requests).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["an environment reference", "$META_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "meta-\u0007-fixture"],
+    ])(
+      "never sends %s from META_API_KEY, and does not call that a sign-out",
+      async (_label, value) => {
+        process.env.META_API_KEY = value;
+        const api = stubRejectingKeyEndpoint();
+
+        const result = await readQuotaAsLinux();
+
+        expect(api.requests).toEqual([]);
+        expect(result.state.status).toBe("error");
+        expect(result.state.error).toBe("meta_api_key_invalid");
+        expect(result.state.authStatus).toBeUndefined();
+      },
+    );
+
+    it.each(BROKEN_ENTRIES)(
+      "marks a present but unusable meta entry (%s) as a credential that exists, then hands over",
+      async (_label, entry) => {
+        writeMuseStore({ providers: { meta: entry } });
+        process.env.META_API_KEY = "meta-contract-fixture";
+        const api = stubRejectingKeyEndpoint();
+
+        const result = await readQuotaAsLinux();
+
+        for (const attempt of attemptsFor(result, store))
+          expect(attempt.credentialPresent).toBe(true);
+        expect(api.requests).toEqual([
+          JSON.stringify([
+            "Bearer meta-contract-fixture",
+            JSON.stringify({ onboard: false }),
+          ]),
+        ]);
+      },
+    );
+
+    it("sends only the stored access token, never its refresh token", async () => {
+      writeMuseStore({
+        providers: {
+          meta: {
+            access_token: "muse-contract-access",
+            refresh_token: "must-not-be-read",
+          },
+        },
+      });
+      const api = stubRejectingKeyEndpoint();
+
+      const result = await readQuotaAsLinux();
+
+      expect(api.requests).toHaveLength(1);
+      expect(api.requests[0]).toContain("Bearer muse-contract-access");
+      expect(api.requests.join("")).not.toContain("must-not-be-read");
+      expect(result.state.authStatus).toBe("expired_refreshable");
     });
   });
 });
