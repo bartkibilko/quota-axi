@@ -15,7 +15,9 @@ export type StaticProviderId =
   | "deepseek"
   | "openrouter"
   | "elevenlabs"
-  | "devin";
+  | "devin"
+  | "muse"
+  | "higgsfield";
 
 export type CustomProviderId = `custom:${string}`;
 
@@ -39,6 +41,8 @@ export const PROVIDER_IDS = [
   "openrouter",
   "elevenlabs",
   "devin",
+  "muse",
+  "higgsfield",
 ] as const satisfies readonly StaticProviderId[];
 
 export type ProviderSource =
@@ -171,8 +175,9 @@ export type EffectiveSelection = Partial<
 > & {
   status: "known" | "unknown";
   /**
-   * Bounding windows whose pace is unknown or unusable. Any such window makes
-   * the whole scope unmeasurable and suppresses the scalar.
+   * Bounding windows that blocked the scalar. Any named window makes the whole
+   * scope unmeasurable. Omitted when `status` is `unknown` only because every
+   * bound is untriggered (no cycle to weight).
    */
   unmeasurableWindowIds?: string[];
 };
@@ -219,6 +224,11 @@ export type QuotaWindow = {
   limit?: number;
   /** ISO-style uppercase currency code for provider-native spend fields. */
   currency?: string;
+  /** Credit-unit amounts for non-USD credit caps (e.g. workspace spend controls). */
+  limitCredits?: number;
+  usedCredits?: number;
+  remainingCredits?: number;
+  creditUnit?: string;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
@@ -279,9 +289,29 @@ export type DegradedSource = {
   error?: string;
 };
 
+/**
+ * The local selector a discovered account lane reads, so a consumer can map
+ * the lane back to the configuration that names it. Never a credential or a
+ * verified user identity. Published only by `--full`.
+ */
+export type AccountLocator = {
+  /** Which kind of selector `path` is, such as `config-dir`. */
+  kind: string;
+  path: string;
+  /** The exact secure-store service the lane reads, where one applies. */
+  keychainService?: string;
+  /**
+   * True only for the lane the process-selected credential owns, which alone
+   * may run delegated refresh; false for a read-only sibling lane.
+   */
+  delegateEligible?: boolean;
+};
+
 export type ProviderAccount = {
   /** Opaque local lane identity, stable across refresh and discovery order. */
   accountKey: string;
+  /** Exact local selector evidence, published on the lane's row by `--full`. */
+  locator?: AccountLocator;
   /**
    * Resolves undefined when the lane establishes no distinct account. A
    * reading that covers credential keys folded into this lane names them in
@@ -302,6 +332,12 @@ export type ProviderQuota = {
    * just its own key, and a provider without account discovery lists `default`.
    */
   accountKeys?: string[];
+  /**
+   * The local selector an expanded lane reads. Present only when the adapter
+   * names one and the report expanded; omitted from default `--json`, see
+   * `--full`.
+   */
+  accountLocator?: AccountLocator;
   /** Display name. Omitted from default `--json`; see `--full`. */
   label?: string;
   /** Report provenance. Omitted from default `--json`; see `--full`. */
@@ -325,6 +361,17 @@ export type ProviderQuota = {
    * Static providers keep their relationships in interpretation.ts.
    */
   customScopeBindings?: Record<string, string[]>;
+  /**
+   * PHI-safe job-outcome sample from a vendor list command. Counts only;
+   * never prompts, URLs, ids, or account identity. Restored on cache reuse
+   * the same way `credits` is; absent when the snapshot carried none.
+   */
+  jobs?: {
+    sampled: number;
+    completed: number;
+    failed: number;
+    other: number;
+  };
   state: {
     status: ProviderStatus;
     stale: boolean;
@@ -348,6 +395,12 @@ export type ProviderQuota = {
     degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */
     sourcesTried?: string[];
+    /**
+     * Sparse marker: this fresh reading is the last successful one, served
+     * from the cache instead of asking the vendor again, and `refreshedAt`
+     * (kept in default `--json` when this is set) says when it was taken.
+     */
+    reused?: true;
   };
   attempts?: SourceAttempt[];
   /**
@@ -405,7 +458,10 @@ export type ProviderAdapter = {
    * error wording. A provider with such a skip is never folded as not set up.
    */
   isUncertainSkip?(attempt: SourceAttempt): boolean;
-  discoverAccounts?(): Promise<ProviderAccount[] | undefined>;
+  discoverAccounts?(
+    options?: ProviderOptions,
+    operation?: "quota" | "auth",
+  ): Promise<ProviderAccount[] | undefined>;
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };

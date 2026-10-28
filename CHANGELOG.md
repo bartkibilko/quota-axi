@@ -1,5 +1,139 @@
 # Changelog
 
+## [0.1.68](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.67...quota-axi-v0.1.68) (2026-10-26)
+
+
+### Features
+
+* **providers:** read Copilot quota for GitHub Enterprise Cloud (ghe.com) hosts ([#358](https://github.com/kunchenguid/quota-axi/issues/358)) ([91dc7dd](https://github.com/kunchenguid/quota-axi/commit/91dc7dd5007eb3292a6c8b622595460830d5cb85))
+
+## [0.1.67](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.66...quota-axi-v0.1.67) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** update undici to 6.29.1 ([#350](https://github.com/kunchenguid/quota-axi/issues/350)) ([e68103e](https://github.com/kunchenguid/quota-axi/commit/e68103e8e65eaa22d7f6581bba78eed5d951944a))
+
+## [0.1.66](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.65...quota-axi-v0.1.66) (2026-10-22)
+
+
+### Bug Fixes
+
+* **providers:** report Gemini 4 Argon under its own Antigravity window id ([#345](https://github.com/kunchenguid/quota-axi/issues/345)) ([9bad9f3](https://github.com/kunchenguid/quota-axi/commit/9bad9f3593f02ca05cbb015e34db7e68e9650190))
+
+## [0.1.65](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.64...quota-axi-v0.1.65) (2026-10-20)
+
+
+### Features
+
+* **opencode-go:** read OpenCode 2.x credentials from opencode.db ([#341](https://github.com/kunchenguid/quota-axi/issues/341)) ([040fe36](https://github.com/kunchenguid/quota-axi/commit/040fe36178518cc04c21d35742b670fe31225e4d))
+
+## [0.1.64](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.63...quota-axi-v0.1.64) (2026-10-15)
+
+
+### Features
+
+* **tui:** name account lanes by account key in tui.accountLabels ([#335](https://github.com/kunchenguid/quota-axi/issues/335)) ([b3ccf8e](https://github.com/kunchenguid/quota-axi/commit/b3ccf8ed1b3ef6be7d7e920ac51fd620789f2d14))
+
+## [0.1.63](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.62...quota-axi-v0.1.63) (2026-10-15)
+
+
+### Features
+
+* **providers:** report Claude accounts from claude-swap ([#333](https://github.com/kunchenguid/quota-axi/issues/333)) ([5e50b51](https://github.com/kunchenguid/quota-axi/commit/5e50b51653c9bfdf7fa1621b235a49188ce36cb9))
+
+## [0.1.62](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.61...quota-axi-v0.1.62) (2026-10-14)
+
+
+### Features
+
+* **tui:** name account lanes with tui.accountLabels ([#329](https://github.com/kunchenguid/quota-axi/issues/329)) ([97fad39](https://github.com/kunchenguid/quota-axi/commit/97fad392ea67e2bffc5e7900a508af5b02ddbc23))
+
+## [0.1.61](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.60...quota-axi-v0.1.61) (2026-10-12)
+
+
+### Features
+
+* **providers:** report opt-in Claude profile lanes from QUOTA_AXI_CLAUDE_PROFILES ([#327](https://github.com/kunchenguid/quota-axi/issues/327)) ([9b66e34](https://github.com/kunchenguid/quota-axi/commit/9b66e34d0ee26c7ba3067d8a40cad655457f1323))
+
+## [0.1.60](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.59...quota-axi-v0.1.60) (2026-10-09)
+
+
+### Features
+
+* **model-kb:** replace Claude Haiku 4.5 with Haiku 5.5 ([#324](https://github.com/kunchenguid/quota-axi/issues/324)) ([da6925e](https://github.com/kunchenguid/quota-axi/commit/da6925efeb7b934114aa620a55551bdecfff1c78))
+* **tui:** add opt-in light terminal theme ([#216](https://github.com/kunchenguid/quota-axi/issues/216)) ([a037ba2](https://github.com/kunchenguid/quota-axi/commit/a037ba2151737122682b279f8014a002920ed0c7))
+* **tui:** add opt-in system appearance theme ([#325](https://github.com/kunchenguid/quota-axi/issues/325)) ([8ba593c](https://github.com/kunchenguid/quota-axi/commit/8ba593cc5bfadf365a8b433b9bf5fc7cc01b040c))
+
+
+### Bug Fixes
+
+* **agy:** retire stale cache when Antigravity is definitively uninstalled ([#319](https://github.com/kunchenguid/quota-axi/issues/319)) ([f3ce0fc](https://github.com/kunchenguid/quota-axi/commit/f3ce0fc83e62fc520051523a9c19c61c9b0a620f))
+
+## [0.1.59](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.58...quota-axi-v0.1.59) (2026-10-07)
+
+
+### Bug Fixes
+
+* **codex:** report spend_control cap for Business seats ([#316](https://github.com/kunchenguid/quota-axi/issues/316)) ([0f524bd](https://github.com/kunchenguid/quota-axi/commit/0f524bd7190a4c74a2245f737c0fd85a29be3f84))
+
+## [0.1.58](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.57...quota-axi-v0.1.58) (2026-10-05)
+
+
+### Features
+
+* **providers:** add read-only Higgsfield credits and jobs provider ([#302](https://github.com/kunchenguid/quota-axi/issues/302)) ([a642b5d](https://github.com/kunchenguid/quota-axi/commit/a642b5d047633b1bde4178863317bcd81931fa28))
+
+
+### Bug Fixes
+
+* **higgsfield:** expect unknown runway for a resetless full grant ([#312](https://github.com/kunchenguid/quota-axi/issues/312)) ([15ace96](https://github.com/kunchenguid/quota-axi/commit/15ace96f3b0bd14cefbbd3f45cd4946a81553b7c))
+* **pace:** fail closed to unknown runway when no bound reports a reset ([#307](https://github.com/kunchenguid/quota-axi/issues/307)) ([36dd1ef](https://github.com/kunchenguid/quota-axi/commit/36dd1ef17a80200743b0e626e3d29dad8064c766))
+* **providers:** enable Antigravity cycle-average pace signals ([#308](https://github.com/kunchenguid/quota-axi/issues/308)) ([6f27edf](https://github.com/kunchenguid/quota-axi/commit/6f27edfde64d39bd8e58e639869eeb96b2156ab7))
+
+## [0.1.57](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.56...quota-axi-v0.1.57) (2026-10-04)
+
+
+### Bug Fixes
+
+* **providers:** bound Kimi weekly by the more-used of both /usages shapes ([#304](https://github.com/kunchenguid/quota-axi/issues/304)) ([2b4bbaa](https://github.com/kunchenguid/quota-axi/commit/2b4bbaaa7c550062a8cb0e38a65e0cee11f773e1))
+* **providers:** rank present-but-unusable credentials above plain absence ([#306](https://github.com/kunchenguid/quota-axi/issues/306)) ([17555d9](https://github.com/kunchenguid/quota-axi/commit/17555d96f2efbb40d912860b6fef46ff038f4d4c))
+
+## [0.1.56](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.55...quota-axi-v0.1.56) (2026-10-03)
+
+
+### Features
+
+* **providers:** read Xiaomi MiMo keys from Pi's auth.json ([#298](https://github.com/kunchenguid/quota-axi/issues/298)) ([b996ae2](https://github.com/kunchenguid/quota-axi/commit/b996ae27a000062f76a9e090f2aa5c303649c970))
+
+
+### Bug Fixes
+
+* **providers:** report each verified subscription once across credential routes ([#223](https://github.com/kunchenguid/quota-axi/issues/223)) ([4a5276a](https://github.com/kunchenguid/quota-axi/commit/4a5276add26b00c295918a0c8787aff2c9a68629))
+
+## [0.1.55](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.54...quota-axi-v0.1.55) (2026-09-25)
+
+
+### Features
+
+* **providers:** add Muse subscription quota provider ([#290](https://github.com/kunchenguid/quota-axi/issues/290)) ([3277b9d](https://github.com/kunchenguid/quota-axi/commit/3277b9d62cc8b23a7f4d7f94257b33ddcad78445))
+
+
+### Bug Fixes
+
+* **pace:** exclude untriggered zero-use windows from spendPriority ([#286](https://github.com/kunchenguid/quota-axi/issues/286)) ([43bd789](https://github.com/kunchenguid/quota-axi/commit/43bd789efbd2f60f0951b330d50bf04b54feadfc)), closes [#255](https://github.com/kunchenguid/quota-axi/issues/255)
+* **providers:** advise which CLI restores a soft-expired Kimi login ([#285](https://github.com/kunchenguid/quota-axi/issues/285)) ([6ee88d0](https://github.com/kunchenguid/quota-axi/commit/6ee88d0d8113f37504a1a7604aa378b864a3c0d4))
+* **providers:** bind Codex stale cache to account identity ([#289](https://github.com/kunchenguid/quota-axi/issues/289)) ([f840ea7](https://github.com/kunchenguid/quota-axi/commit/f840ea7c04008ba25ea59437478269ab2bf3b7ef))
+* **providers:** retire cached quota on definitive sign-out ([#283](https://github.com/kunchenguid/quota-axi/issues/283)) ([a7abf51](https://github.com/kunchenguid/quota-axi/commit/a7abf510e7748bb937c938c113f6bd92e8a6db7e))
+* **tui:** count stale cached readings apart from live ([#287](https://github.com/kunchenguid/quota-axi/issues/287)) ([067d1e0](https://github.com/kunchenguid/quota-axi/commit/067d1e02fb8186f7788fae87b0eb6a5cff2c64ab))
+
+## [0.1.54](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.53...quota-axi-v0.1.54) (2026-09-24)
+
+
+### Features
+
+* **cache:** add opt-in fresh reuse with single-flight cold reads ([#279](https://github.com/kunchenguid/quota-axi/issues/279)) ([9b102bc](https://github.com/kunchenguid/quota-axi/commit/9b102bc44611973e9ed1aec9ab96e7d7d8a7d414))
+
 ## [0.1.53](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.52...quota-axi-v0.1.53) (2026-09-23)
 
 

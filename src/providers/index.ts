@@ -12,10 +12,12 @@ import { cursorAdapter } from "./cursor.js";
 import { devinAdapter } from "./devin.js";
 import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
+import { higgsfieldAdapter } from "./higgsfield.js";
 import { kimiAdapter } from "./kimi.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
+import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
@@ -43,6 +45,8 @@ export const PROVIDERS: Record<StaticProviderId, ProviderAdapter> = {
   openrouter: openrouterAdapter,
   elevenlabs: elevenLabsAdapter,
   devin: devinAdapter,
+  muse: museAdapter,
+  higgsfield: higgsfieldAdapter,
 };
 
 export function parseProviders(

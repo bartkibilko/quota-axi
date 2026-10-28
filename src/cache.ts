@@ -1,18 +1,27 @@
 import { createHash } from "node:crypto";
-import { chmodSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   cacheFilePath,
   claudeCredentialContextId,
   ensurePrivateParent,
-  readJsonFile,
+  readUntracedJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
+import { museReadingContextId } from "./providers/muse-cache-context.js";
+import { copilotGithubHost } from "./providers/copilot-host.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
+import { fetchLockPath, withLockSync } from "./lib/fetch-lock.js";
+import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
+import { reuseContextId } from "./lib/reuse-context.js";
 import type {
+  AccountLocator,
+  DegradedSource,
+  ProviderAuthStatus,
   ProviderId,
   ProviderQuota,
   ProviderSource,
@@ -61,13 +70,14 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * cache slot alone does not say: a Claude profile selects the credential store,
  * a Kimi Code `config.toml` selects the deployment, Command Code's `whoami`
  * identifies the source-plus-account pair, an ElevenLabs API key is itself the
- * account, MiniMax stamps by credential source plus deployment host, and a
- * Codex slot can be signed in to another ChatGPT account. A snapshot from one
- * such context says nothing about another, so each is stamped on write and
- * checked on stale reuse - strictly for Claude, Kimi, Command Code, MiniMax,
- * ElevenLabs, and Devin, whose identity a reading always has (and which skip
- * write and clear when that identity is missing), and on proven mismatch for Codex,
- * whose stored account id is optional.
+ * account, MiniMax stamps by credential source plus deployment host, a Muse
+ * credential is the only local thing naming its subscription, and a Codex slot
+ * can be signed in to another ChatGPT account. A snapshot from one such context
+ * says nothing about another, so each is stamped on write and checked on stale
+ * reuse - strictly for Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin,
+ * and Muse, whose identity a reading always has (and which skip write and clear
+ * when that identity is missing). Codex can write an unstamped snapshot, but
+ * stale reuse requires a matching stored account id.
  *
  * How that stamp is obtained is not the same question for each. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
@@ -87,19 +97,34 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * a one-way digest of the key that answered, because that key is the only thing
  * naming the subscription and its single slot would otherwise be shared by
  * every key. Devin publishes the answering source, host, and a one-way digest
- * of the session token, because a new login replaces that token.
+ * of the session token, because a new login replaces that token. Muse publishes
+ * the same kind of digest for the credential that answered, and additionally
+ * reuses its own fresh snapshot inside the key-endpoint interval, so that
+ * stamp is what keeps a replayed reading on the credential that produced it.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
-  claude: claudeCredentialContextId,
+  claude: claudeReadingContextId,
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
   devin: devinReadingContextId,
   codex: codexStampContextId,
   minimax: miniMaxReadingContextId,
+  muse: museReadingContextId,
+  copilot: copilotReadingContextId,
 };
+
+export function copilotCacheContextId(host: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify(["copilot-host-v1", host]))
+    .digest("hex");
+}
+
+function copilotReadingContextId(): string {
+  return copilotCacheContextId(copilotGithubHost());
+}
 
 /**
  * The stored ChatGPT account id the credential that produced this report named.
@@ -127,6 +152,33 @@ function codexStampContextId(provider: ProviderQuota): string | undefined {
   );
 }
 
+/**
+ * The Claude profile context a lane reading was taken under. A symbol key,
+ * like the Codex stamp, so it survives the quota command's object copies while
+ * staying off every serialized surface. Only discovered profile lanes stamp
+ * it; a reading without one belongs to the profile this process selects, as it
+ * always has.
+ */
+const CLAUDE_READING_CONTEXT = Symbol("claudeReadingContext");
+
+type ClaudeStampedQuota = ProviderQuota & {
+  [CLAUDE_READING_CONTEXT]?: string;
+};
+
+export function stampClaudeReadingContext(
+  provider: ProviderQuota,
+  contextId: string,
+): void {
+  (provider as ClaudeStampedQuota)[CLAUDE_READING_CONTEXT] = contextId;
+}
+
+function claudeReadingContextId(provider: ProviderQuota): string {
+  return (
+    (provider as ClaudeStampedQuota)[CLAUDE_READING_CONTEXT] ??
+    claudeCredentialContextId()
+  );
+}
+
 function codexAccountContextId(accountId?: string): string | undefined {
   return accountId
     ? createHash("sha256")
@@ -135,10 +187,290 @@ function codexAccountContextId(accountId?: string): string | undefined {
     : undefined;
 }
 
+/**
+ * The verified subscription a snapshot was read from, hashed because the cache
+ * holds no account identity in the clear. A symbol key carries it onto the
+ * snapshot, and from there through `staleFromCache`, while keeping it off every
+ * serialized surface, so a stale reading can still be recognised as the same
+ * subscription as a fresh sibling route.
+ */
+const SUBSCRIPTION_IDENTITY = Symbol("subscriptionIdentity");
+
+type SubscriptionStampedQuota = ProviderQuota & {
+  [SUBSCRIPTION_IDENTITY]?: string;
+};
+
+/**
+ * One comparable subscription identity per reading: the verified
+ * `account.accountId` a live reading reports, else the stamp a cached snapshot
+ * carried. Missing or unverified identity yields nothing, never a guess.
+ */
+export function subscriptionIdentity(
+  report: ProviderQuota,
+): string | undefined {
+  const accountId =
+    report.account?.identityStatus === "unverified"
+      ? undefined
+      : report.account?.accountId?.trim();
+  if (accountId) {
+    const scoped = report as ScopedSubscriptionQuota;
+    if (!Object.hasOwn(scoped, SUBSCRIPTION_SCOPE))
+      return createHash("sha256")
+        .update(JSON.stringify(["subscription-v1", report.provider, accountId]))
+        .digest("hex");
+    const scope = scoped[SUBSCRIPTION_SCOPE];
+    if (!scope) return undefined;
+    return createHash("sha256")
+      .update(
+        JSON.stringify(["subscription-v1", report.provider, accountId, scope]),
+      )
+      .digest("hex");
+  }
+  return (report as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY];
+}
+
+/**
+ * Where one account id holds more than one subscription, the reading names
+ * which one it measured. A Claude login can belong to several organizations
+ * (a personal plan and a team seat), each with its own limits, so the user id
+ * alone would fold two quota pools into one row. `null` says the reading could
+ * not name its subscription, which leaves its identity incomparable rather
+ * than guessed. A symbol key keeps it off every serialized surface.
+ */
+const SUBSCRIPTION_SCOPE = Symbol("subscriptionScope");
+
+type ScopedSubscriptionQuota = ProviderQuota & {
+  [SUBSCRIPTION_SCOPE]?: string | null;
+};
+
+export function stampSubscriptionScope(
+  report: ProviderQuota,
+  scope: string | null,
+): void {
+  (report as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE] = scope;
+}
+
+/**
+ * Carry a cached snapshot's hashed subscription stamp onto a stale reading an
+ * adapter assembled field by field, so it still coalesces with a fresh lane of
+ * the same subscription.
+ */
+export function carrySubscriptionStamp(
+  cached: ProviderQuota,
+  stale: ProviderQuota,
+): void {
+  const stamp = (cached as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY];
+  if (stamp) (stale as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] = stamp;
+}
+
+/**
+ * Fresh lane readings a published reading superseded when it coalesced lanes
+ * of one subscription. `writeCachedProviders` persists each in its own slot in
+ * the same write as the winner, so a route that later fails still serves its
+ * own stamped snapshot and coalesces again instead of surfacing as a separate
+ * card. A symbol key keeps them off every serialized surface.
+ */
+const SUPERSEDED_READINGS = Symbol("supersededReadings");
+
+type SupersedingQuota = ProviderQuota & {
+  [SUPERSEDED_READINGS]?: readonly ProviderQuota[];
+};
+
+export function supersededReadings(
+  report: ProviderQuota,
+): readonly ProviderQuota[] {
+  return (report as SupersedingQuota)[SUPERSEDED_READINGS] ?? [];
+}
+
+export function markSupersededReadings(
+  report: ProviderQuota,
+  readings: readonly ProviderQuota[],
+): void {
+  (report as SupersedingQuota)[SUPERSEDED_READINGS] = readings;
+}
+
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
+  reuse?: ReuseStamp;
 };
+
+/**
+ * What fresh reuse needs beyond the stale-fallback snapshot. It is kept apart
+ * from `snapshot.state` so a stale fallback never carries a reading's
+ * `authStatus` or superseded sources forward as if they were current.
+ */
+type ReuseStamp = {
+  /** {@link reuseContextId} of the process that took the reading. */
+  context: string;
+  /** The local files the reading was derived from, and their state then. */
+  inputs: string[];
+  inputsDigest: string;
+  /** The report's `generatedAt`, shared by every lane of one reading. */
+  readingAt: string;
+  /** Lanes that reading reported, so a partial group is never served. */
+  lanes: number;
+  /** This lane's position in the adapter's declaration order. */
+  lane: number;
+  accountKeys?: string[];
+  /** The lane's local selector, so a reused `--full` row still names it. */
+  accountLocator?: AccountLocator;
+  authStatus?: ProviderAuthStatus;
+  degradedSources?: DegradedSource[];
+};
+
+const AUTH_STATUSES = [
+  "usable",
+  "expired_refreshable",
+  "unusable",
+] as const satisfies readonly ProviderAuthStatus[];
+
+/**
+ * The local inputs a provider's reading was traced to. A symbol key, like the
+ * Codex stamp, so it survives the quota command's object copies while staying
+ * off every serialized surface.
+ */
+const READING_INPUTS = Symbol("readingInputs");
+
+type TracedQuota = ProviderQuota & { [READING_INPUTS]?: TracedInputs };
+
+/**
+ * Attach the inputs a reading was traced to. Only a traced reading is ever
+ * stamped for fresh reuse, because nothing else says what it depended on.
+ */
+export function stampReadingInputs(
+  provider: ProviderQuota,
+  inputs: TracedInputs,
+): void {
+  (provider as TracedQuota)[READING_INPUTS] = inputs;
+}
+
+/**
+ * The last successful reading of `provider`, when it was taken by a process
+ * making the same credential selection as this one, no local file it was
+ * derived from has changed since, every lane it reported was cached, and it is
+ * younger than `maxAgeSeconds`. Returns `undefined`
+ * whenever any of that is not established, so the caller reads the vendor.
+ */
+export function readReusableProviders(
+  provider: ProviderId,
+  maxAgeSeconds: number,
+  now: number = Date.now(),
+  contextId: string = reuseContextId(),
+): ProviderQuota[] | undefined {
+  if (!(maxAgeSeconds > 0) || excludeFromFreshReuse(provider)) return undefined;
+  const records = readCacheProviders().filter(
+    (record) =>
+      record.snapshot.provider === provider &&
+      record.reuse?.context === contextId,
+  );
+  const readingAt = records
+    .map((record) => record.reuse?.readingAt ?? "")
+    .sort()
+    .at(-1);
+  const group = records.filter(
+    (record) => record.reuse?.readingAt === readingAt,
+  );
+  if (group.length === 0 || group.length !== group[0].reuse?.lanes)
+    return undefined;
+  const young = group.every((record) => {
+    const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
+    return (
+      Number.isFinite(refreshedAt) &&
+      refreshedAt <= now &&
+      now - refreshedAt < maxAgeSeconds * 1_000
+    );
+  });
+  if (!young || !group.every((record) => stillCurrent(record, now)))
+    return undefined;
+  const stamp = group[0].reuse as ReuseStamp;
+  if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
+  return group
+    .sort((a, b) => (a.reuse?.lane ?? 0) - (b.reuse?.lane ?? 0))
+    .map(reusedReading);
+}
+
+/**
+ * The single-flight lock guarding vendor reads of `provider` under this
+ * process's credential selection, so processes selecting different
+ * credentials never wait on each other (#61).
+ */
+export function fetchLockPathFor(
+  provider: ProviderId,
+  contextId: string = reuseContextId(),
+): string {
+  const key = createHash("sha256")
+    .update(JSON.stringify(["fetch-lock-v1", provider, contextId]))
+    .digest("hex");
+  return fetchLockPath(dirname(cacheFilePath()), key);
+}
+
+/**
+ * Whether a supplied snapshot file exists and every record in it parses as a
+ * quota cache record. A record the cache reader would drop would otherwise
+ * read as a fixture that never named that provider.
+ */
+export function isSnapshotFile(file: string): boolean {
+  const raw = readUntracedJsonFile(file);
+  const records = objectValue(raw)?.providers;
+  return (
+    Array.isArray(records) &&
+    parseCacheProviders(raw)?.length === records.length
+  );
+}
+
+/**
+ * Every reading of `provider` in a snapshot file supplied for tests and
+ * fixtures, in file order. `undefined` when the file names no such provider;
+ * `"expired"` when a window's own reset has already passed, because a number
+ * that has stopped being true is never served (#257), not even from a stub.
+ */
+export function readSnapshotProviders(
+  file: string,
+  provider: ProviderId,
+  now: number = Date.now(),
+): ProviderQuota[] | "expired" | undefined {
+  const records = readCacheProviders(file).filter(
+    (record) => record.snapshot.provider === provider,
+  );
+  if (records.length === 0) return undefined;
+  if (!records.every((record) => stillCurrent(record, now))) return "expired";
+  return records.map(reusedReading);
+}
+
+/** Whether no window of this reading has reached its own reported reset. */
+function stillCurrent(record: CachedProvider, now: number): boolean {
+  return record.snapshot.windows.every(
+    (window) =>
+      window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+  );
+}
+
+function reusedReading(record: CachedProvider): ProviderQuota {
+  const { snapshot, reuse } = record;
+  return {
+    ...snapshot,
+    ...(reuse?.accountKeys ? { accountKeys: [...reuse.accountKeys] } : {}),
+    ...(reuse?.accountLocator
+      ? { accountLocator: { ...reuse.accountLocator } }
+      : {}),
+    windows: snapshot.windows.map((window) => ({ ...window })),
+    state: {
+      ...snapshot.state,
+      status: "fresh",
+      stale: false,
+      reused: true,
+      ...(reuse?.authStatus ? { authStatus: reuse.authStatus } : {}),
+      ...(reuse?.degradedSources
+        ? {
+            degradedSources: reuse.degradedSources.map((source) => ({
+              ...source,
+            })),
+          }
+        : {}),
+    },
+  };
+}
 
 export function readCachedProvider(
   provider: ProviderId,
@@ -160,8 +492,8 @@ function readCachedRecord(
 }
 
 /**
- * Codex stale quota, withheld when the snapshot was stamped with a stored
- * ChatGPT account id none of the failed reading's tried credentials name. A
+ * Codex stale quota, served only when the snapshot's stored ChatGPT account id
+ * matches a credential the failed reading tried. A
  * Codex slot is not tied to one account by its name: the keyless slot is shared
  * by a sole discovered lane and the single-account path, and a stable Pi entry
  * key can be signed in to a different account, so the slot alone cannot say
@@ -170,19 +502,26 @@ function readCachedRecord(
  * The stamp is the stored id, not the vendor response id: those can differ
  * while the same token is live, and a later failed probe only has the store.
  * An unstamped snapshot, or a reading whose tried credentials name no account,
- * proves nothing either way and is served as before.
+ * cannot establish ownership and is withheld from stale fallback.
  */
 export function readCachedCodexProvider(
   accountKey: string | undefined,
   accountIds: readonly string[],
 ): ProviderQuota | undefined {
-  const record = readCachedRecord("codex", accountKey);
-  if (!record) return undefined;
-  const contextId = record.credentialContextId;
-  if (!contextId || accountIds.length === 0) return record.snapshot;
-  return accountIds.some((id) => codexAccountContextId(id) === contextId)
-    ? record.snapshot
-    : undefined;
+  if (accountIds.length === 0) return undefined;
+  const records = [
+    readCachedRecord("codex", accountKey),
+    ...(accountKey === "codex-home"
+      ? [readCachedRecord("codex", undefined)]
+      : []),
+  ];
+  return records.find(
+    (record) =>
+      record?.credentialContextId !== undefined &&
+      accountIds.some(
+        (id) => codexAccountContextId(id) === record.credentialContextId,
+      ),
+  )?.snapshot;
 }
 
 /**
@@ -250,83 +589,267 @@ export function readCachedDevinProvider(
   return readCachedProviderInContext("devin", contextId);
 }
 
+/**
+ * Muse quota may only be reused when the cache record proves it was captured
+ * with the same credential, so one subscription's windows can never stand in
+ * for another's.
+ */
+export function readCachedMuseProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("muse", contextId);
+}
+
+export function readCachedCopilotProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("copilot", contextId);
+}
+
 function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
 ): ProviderQuota | undefined {
   if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
-  return readCacheProviders().find(
-    (item) =>
-      item.snapshot.provider === provider &&
-      item.credentialContextId === contextId,
-  )?.snapshot;
+  const refreshedAt = (item: CachedProvider) => {
+    const time = Date.parse(item.snapshot.state.refreshedAt ?? "");
+    return Number.isFinite(time) ? time : -Infinity;
+  };
+  return readCacheProviders()
+    .filter(
+      (item) =>
+        item.snapshot.provider === provider &&
+        item.credentialContextId === contextId,
+    )
+    .reduce<CachedProvider | undefined>(
+      (newest, item) =>
+        newest && refreshedAt(newest) >= refreshedAt(item) ? newest : item,
+      undefined,
+    )?.snapshot;
 }
 
-export function writeCachedProviders(providers: ProviderQuota[]): void {
-  providers = providers.filter(
+export function writeCachedProviders(
+  published: ProviderQuota[],
+  readingAt: string = new Date().toISOString(),
+): void {
+  // A reused reading is already the record it came from: rewriting it would
+  // restamp its age, and a missing context identity must not clear it.
+  const fresh = published.filter((provider) => !provider.state.reused);
+  const reuseStamps = reuseStampsFor(fresh, readingAt);
+  // A lane a coalesced report superseded still gets its own slot in this
+  // write, so a later run where that route fails merges it from cache
+  const providers = fresh
+    .flatMap((provider) => [provider, ...supersededReadings(provider)])
+    .filter((provider) => !isCacheExcluded(provider));
+  const emptyReadings = providers.filter(
     (provider) =>
-      !provider.provider.startsWith("custom:") &&
-      !(
-        (provider.provider === "claude" || provider.provider === "copilot") &&
-        provider.source === "cli"
-      ),
+      provider.state.status === "fresh" &&
+      provider.windows.length === 0 &&
+      !missingRequiredContext(provider.provider),
   );
-  const clearProviders = new Set(
-    providers
-      .filter(
-        (provider) =>
-          provider.state.status === "fresh" &&
-          provider.windows.length === 0 &&
-          !missingRequiredContext(provider.provider),
-      )
-      .map(cacheIdentity),
+  const clearProviders = new Set(emptyReadings.map(cacheIdentity));
+  // One Claude profile can hold a plain slot and an opted-in lane slot, so a
+  // confirmed-empty reading clears every slot its profile context wrote
+  const clearClaudeContexts = new Set(
+    emptyReadings
+      .filter((provider) => provider.provider === "claude")
+      .map(claudeReadingContextId),
   );
   const cacheable = providers
-    .map(toCacheProvider)
+    .map((provider) => {
+      const record = toCacheProvider(provider);
+      const reuse = reuseStamps.get(provider);
+      return record && reuse ? { ...record, reuse } : record;
+    })
     .filter((provider): provider is CachedProvider => Boolean(provider));
+  // Taking the lock creates the cache directory, so a reading that writes
+  // and clears nothing must leave no trace on disk
+  if (cacheable.length === 0 && clearProviders.size === 0) return;
 
-  const file = cacheFilePath();
-  const byProvider = new Map<string, CachedProvider>();
-  let clearedExisting = false;
-  for (const provider of readCacheProviders()) {
-    if (clearProviders.has(cacheIdentity(provider.snapshot))) {
-      clearedExisting = true;
-      continue;
+  withCacheWriteLock(() => {
+    const byProvider = new Map<string, CachedProvider>();
+    let clearedExisting = false;
+    for (const provider of readCacheProviders()) {
+      if (
+        clearProviders.has(cacheIdentity(provider.snapshot)) ||
+        (provider.snapshot.provider === "claude" &&
+          clearClaudeContexts.has(provider.credentialContextId ?? ""))
+      ) {
+        clearedExisting = true;
+        continue;
+      }
+      byProvider.set(cacheIdentity(provider.snapshot), provider);
     }
-    byProvider.set(cacheIdentity(provider.snapshot), provider);
-  }
-  if (cacheable.length === 0 && !clearedExisting) return;
-  for (const provider of cacheable)
-    byProvider.set(cacheIdentity(provider.snapshot), provider);
-  const merged = [...byProvider.values()].sort(
-    (a, b) =>
-      providerSortIndex(a.snapshot.provider) -
-        providerSortIndex(b.snapshot.provider) ||
-      (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
-        b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
-      ),
-  );
+    if (cacheable.length === 0 && !clearedExisting) return;
+    for (const provider of cacheable)
+      byProvider.set(cacheIdentity(provider.snapshot), provider);
+    const merged = [...byProvider.values()].sort(
+      (a, b) =>
+        providerSortIndex(a.snapshot.provider) -
+          providerSortIndex(b.snapshot.provider) ||
+        (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
+          b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
+        ),
+    );
 
-  writeCacheFile(file, merged);
+    writeCacheFile(cacheFilePath(), merged);
+  });
+}
+
+/**
+ * Serialize the cache file's read-modify-write across processes. Leaders of
+ * different providers write at once in a concurrent burst, and a merge that
+ * read the file before another leader's write would drop that reading, so
+ * its waiters would all find nothing and read the vendor together.
+ */
+function withCacheWriteLock(fn: () => void): void {
+  withLockSync(join(dirname(cacheFilePath()), "locks", "cache-write.lock"), fn);
+}
+
+/**
+ * Fresh-reuse stamps for the providers whose every lane in this report is
+ * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
+ * so the next read asks the vendor again instead of serving part of a report.
+ */
+function reuseStampsFor(
+  providers: ProviderQuota[],
+  readingAt: string,
+): Map<ProviderQuota, ReuseStamp> {
+  const stamps = new Map<ProviderQuota, ReuseStamp>();
+  let context: string | undefined;
+  for (const id of new Set(providers.map((provider) => provider.provider))) {
+    if (excludeFromFreshReuse(id)) continue;
+    const lanes = providers.filter((provider) => provider.provider === id);
+    const inputs = (lanes[0] as TracedQuota)[READING_INPUTS];
+    if (
+      !inputs ||
+      !lanes.every(
+        (provider) =>
+          (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          !isCacheExcluded(provider) &&
+          toCacheProvider(provider),
+      )
+    )
+      continue;
+    context ??= reuseContextId();
+    lanes.forEach((provider, lane) => {
+      stamps.set(provider, {
+        context: context as string,
+        inputs: inputs.paths,
+        inputsDigest: inputs.digest,
+        readingAt,
+        lanes: lanes.length,
+        lane,
+        ...(provider.accountKeys ? { accountKeys: provider.accountKeys } : {}),
+        ...(provider.accountLocator
+          ? { accountLocator: provider.accountLocator }
+          : {}),
+        ...(provider.state.authStatus
+          ? { authStatus: provider.state.authStatus }
+          : {}),
+        ...(provider.state.degradedSources?.length
+          ? { degradedSources: provider.state.degradedSources }
+          : {}),
+      });
+    });
+  }
+  return stamps;
+}
+
+function isCacheExcluded(provider: ProviderQuota): boolean {
+  return (
+    provider.provider.startsWith("custom:") ||
+    ((provider.provider === "claude" || provider.provider === "copilot") &&
+      provider.source === "cli")
+  );
+}
+
+function excludeFromFreshReuse(provider: ProviderId): boolean {
+  // Muse Keychain and Higgsfield CLI logins are not traced files, and the
+  // Higgsfield status payload we already fetch has no stable non-email
+  // account discriminator, so --max-age must never serve another seat's
+  // credits or jobs as fresh.
+  return (
+    provider.startsWith("custom:") ||
+    provider === "muse" ||
+    provider === "higgsfield"
+  );
 }
 
 function cacheIdentity(provider: ProviderQuota): string {
   return `${provider.provider}/${provider.accountKey ?? DEFAULT_ACCOUNT_KEY}`;
 }
 
+/**
+ * Retire one slot. An omitted key retires only the default slot, so a sibling
+ * account's snapshot stays. {@link deleteCachedProvider} with no key removes
+ * every slot for that provider.
+ */
+export function retireCachedSlot(
+  provider: ProviderId,
+  accountKey?: string,
+): void {
+  deleteCachedProvider(provider, accountKey ?? DEFAULT_ACCOUNT_KEY);
+}
+
+/**
+ * Retire Codex snapshots stamped with one of the rejected stored account ids.
+ * A slot stamped for another account, or not stamped at all, stays.
+ */
+export function retireCodexAccount(accountIds: readonly string[]): void {
+  if (!existsSync(cacheFilePath())) return;
+  const contextIds = new Set(accountIds.map(codexAccountContextId));
+  withCacheWriteLock(() => {
+    const existing = readCacheProviders();
+    const remaining = existing.filter(
+      (item) =>
+        item.snapshot.provider !== "codex" ||
+        !(item.credentialContextId && contextIds.has(item.credentialContextId)),
+    );
+    if (remaining.length === existing.length) return;
+    writeCacheFile(cacheFilePath(), remaining);
+  });
+}
+
+/**
+ * Retire the snapshots one credential context wrote, whichever slot holds
+ * them. A discovered Claude profile's sign-out speaks only for that profile,
+ * so its siblings' snapshots stay.
+ */
+export function retireCachedContext(
+  provider: ProviderId,
+  contextId: string,
+): void {
+  if (!CREDENTIAL_CONTEXT_ID.test(contextId) || !existsSync(cacheFilePath()))
+    return;
+  withCacheWriteLock(() => {
+    const existing = readCacheProviders();
+    const remaining = existing.filter(
+      (item) =>
+        item.snapshot.provider !== provider ||
+        item.credentialContextId !== contextId,
+    );
+    if (remaining.length === existing.length) return;
+    writeCacheFile(cacheFilePath(), remaining);
+  });
+}
+
 export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): void {
-  const existing = readCacheProviders();
-  const remaining = existing.filter((item) =>
-    item.snapshot.provider !== provider
-      ? true
-      : accountKey !== undefined &&
-        (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) !== accountKey,
-  );
-  if (remaining.length === existing.length) return;
-  writeCacheFile(cacheFilePath(), remaining);
+  if (!existsSync(cacheFilePath())) return;
+  withCacheWriteLock(() => {
+    const existing = readCacheProviders();
+    const remaining = existing.filter((item) =>
+      item.snapshot.provider !== provider
+        ? true
+        : accountKey !== undefined &&
+          (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) !== accountKey,
+    );
+    if (remaining.length === existing.length) return;
+    writeCacheFile(cacheFilePath(), remaining);
+  });
 }
 
 function writeCacheFile(file: string, providers: CachedProvider[]): void {
@@ -350,8 +873,12 @@ function writeCacheFile(file: string, providers: CachedProvider[]): void {
   chmodSync(file, 0o600);
 }
 
-function readCacheProviders(): CachedProvider[] {
-  const raw = readJsonFile(cacheFilePath());
+function readCacheProviders(file: string = cacheFilePath()): CachedProvider[] {
+  return parseCacheProviders(readUntracedJsonFile(file)) ?? [];
+}
+
+/** `undefined` when the value is not a quota cache payload this version reads */
+function parseCacheProviders(raw: unknown): CachedProvider[] | undefined {
   const payload = objectValue(raw);
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
@@ -361,14 +888,20 @@ function readCacheProviders(): CachedProvider[] {
       schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
-    return [];
+    return undefined;
   return payload.providers
     .map((provider) => normalizeCachedProvider(provider, schemaVersion))
     .filter((provider): provider is CachedProvider => Boolean(provider));
 }
 
 function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
-  if (provider.state.status !== "fresh" || provider.windows.length === 0)
+  // A reading served from the cache observed nothing new; rewriting it would
+  // only relabel an old observation.
+  if (
+    provider.state.status !== "fresh" ||
+    provider.windows.length === 0 ||
+    provider.source === "cache"
+  )
     return undefined;
   const snapshot = normalizeCachedProvider(
     {
@@ -382,6 +915,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       plan: provider.plan,
       windows: provider.windows,
       credits: provider.credits,
+      jobs: provider.jobs,
       state: {
         status: provider.state.status,
         stale: false,
@@ -393,10 +927,14 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
+  const subscription = subscriptionIdentity(provider);
+  if (subscription)
+    (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
+      subscription;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
-  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, and Devin require a published
-  // identity; Codex stamps are optional and withheld only on proven mismatch
-  // at read time.
+  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, and Muse require a
+  // published identity; Codex stamps are optional at write time, but an unstamped
+  // snapshot cannot be served as stale.
   if (
     provider.provider !== "codex" &&
     CONTEXT_SCOPED_PROVIDERS[provider.provider] &&
@@ -410,9 +948,9 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
 }
 
 function missingRequiredContext(provider: ProviderId): boolean {
-  // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax, ElevenLabs,
-  // and Devin must
-  // not clear when the current reading has no published context identity.
+  // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax,
+  // ElevenLabs, Devin, and Muse must not clear when the current reading has
+  // no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
   return scope !== undefined && !scope({ provider } as ProviderQuota);
@@ -421,12 +959,86 @@ function missingRequiredContext(provider: ProviderId): boolean {
 function serializeCachedProvider(
   provider: CachedProvider,
 ): Record<string, unknown> {
+  const subscription = (provider.snapshot as SubscriptionStampedQuota)[
+    SUBSCRIPTION_IDENTITY
+  ];
   return {
     ...provider.snapshot,
+    ...(subscription ? { subscription } : {}),
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
       : {}),
+    ...(provider.reuse ? { reuse: provider.reuse } : {}),
   };
+}
+
+function normalizeReuseStamp(raw: unknown): ReuseStamp | undefined {
+  const data = objectValue(raw);
+  const context = stringValue(data?.context);
+  const inputs = stringArrayValue(data?.inputs);
+  const digest = stringValue(data?.inputsDigest);
+  const readingAt = stringValue(data?.readingAt);
+  const lanes = numberValue(data?.lanes);
+  const lane = numberValue(data?.lane);
+  if (
+    !data ||
+    !context ||
+    !CREDENTIAL_CONTEXT_ID.test(context) ||
+    !inputs ||
+    !digest ||
+    !CREDENTIAL_CONTEXT_ID.test(digest) ||
+    !readingAt ||
+    lanes === undefined ||
+    !Number.isInteger(lanes) ||
+    lanes < 1 ||
+    lane === undefined ||
+    !Number.isInteger(lane) ||
+    lane < 0 ||
+    lane >= lanes
+  )
+    return undefined;
+  const stamp: ReuseStamp = {
+    context,
+    inputs,
+    inputsDigest: digest,
+    readingAt,
+    lanes,
+    lane,
+  };
+  const accountKeys = stringArrayValue(data.accountKeys);
+  const authStatus = literalValue(data.authStatus, AUTH_STATUSES);
+  const degradedSources = Array.isArray(data.degradedSources)
+    ? data.degradedSources.map(normalizeDegradedSource)
+    : undefined;
+  if (accountKeys && accountKeys.length > 0) stamp.accountKeys = accountKeys;
+  const accountLocator = normalizeAccountLocator(data.accountLocator);
+  if (accountLocator) stamp.accountLocator = accountLocator;
+  if (authStatus) stamp.authStatus = authStatus;
+  if (degradedSources?.length && degradedSources.every(Boolean))
+    stamp.degradedSources = degradedSources as DegradedSource[];
+  return stamp;
+}
+
+function normalizeAccountLocator(raw: unknown): AccountLocator | undefined {
+  const data = objectValue(raw);
+  const kind = stringValue(data?.kind);
+  const path = stringValue(data?.path);
+  if (!data || !kind || !path) return undefined;
+  const locator: AccountLocator = { kind, path };
+  const keychainService = stringValue(data.keychainService);
+  const delegateEligible = booleanValue(data.delegateEligible);
+  if (keychainService) locator.keychainService = keychainService;
+  if (delegateEligible !== undefined)
+    locator.delegateEligible = delegateEligible;
+  return locator;
+}
+
+function normalizeDegradedSource(raw: unknown): DegradedSource | undefined {
+  const data = objectValue(raw);
+  const source = stringValue(data?.source);
+  if (!source) return undefined;
+  const error = stringValue(data?.error);
+  return error ? { source, error } : { source };
 }
 
 function normalizeCachedProvider(
@@ -485,14 +1097,23 @@ function normalizeCachedProvider(
   const refreshedAt = stringValue(state.refreshedAt);
   const untrustedWindowIds = stringArrayValue(state.untrustedWindowIds);
   const credits = normalizeCachedCredits(data.credits);
+  const jobs = normalizeCachedJobs(data.jobs);
+  if (data.jobs !== undefined && !jobs) return undefined;
   if (plan) snapshot.plan = plan;
   if (refreshedAt) snapshot.state.refreshedAt = refreshedAt;
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
+  const subscription = stringValue(data.subscription);
+  if (subscription && CREDENTIAL_CONTEXT_ID.test(subscription))
+    (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
+      subscription;
+  if (jobs) snapshot.jobs = jobs;
   const credentialContext = stringValue(data.credentialContext);
+  const reuse = normalizeReuseStamp(data.reuse);
   return {
     snapshot,
+    ...(reuse ? { reuse } : {}),
     ...(schemaVersion >= 2 &&
     snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&
@@ -518,6 +1139,16 @@ function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {
 function codexWindowBaseIdentity(window: QuotaWindow): string | undefined {
   const id = window.id.replace(/_[2-9]\d*$/, "");
   if (window.windowSeconds === undefined) {
+    if (
+      matchesWindowIdentity(
+        window,
+        id,
+        "spend_control",
+        "workspace credit cap",
+        "credits",
+      )
+    )
+      return id;
     if (matchesWindowIdentity(window, id, "five_hour", "session", "session"))
       return id;
     if (matchesWindowIdentity(window, id, "weekly", "week", "weekly"))
@@ -652,6 +1283,10 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "windowSeconds", data.windowSeconds);
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
+  assignNumber(result, "limitCredits", data.limitCredits);
+  assignNumber(result, "usedCredits", data.usedCredits);
+  assignNumber(result, "remainingCredits", data.remainingCredits);
+  assignString(result, "creditUnit", data.creditUnit);
   return result;
 }
 
@@ -681,6 +1316,29 @@ function normalizeCachedCredits(
     unlimited,
     unit,
   };
+}
+
+function normalizeCachedJobs(raw: unknown): ProviderQuota["jobs"] | undefined {
+  const data = objectValue(raw);
+  if (!data) return undefined;
+  const sampled = numberValue(data.sampled);
+  const completed = numberValue(data.completed);
+  const failed = numberValue(data.failed);
+  const other = numberValue(data.other);
+  if (
+    sampled === undefined ||
+    completed === undefined ||
+    failed === undefined ||
+    other === undefined ||
+    ![sampled, completed, failed, other].every(Number.isSafeInteger) ||
+    sampled < 0 ||
+    completed < 0 ||
+    failed < 0 ||
+    other < 0 ||
+    sampled !== completed + failed + other
+  )
+    return undefined;
+  return { sampled, completed, failed, other };
 }
 
 function assignNumber<T extends object, K extends keyof T>(

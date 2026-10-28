@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { traceInput } from "./input-trace.js";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -55,10 +56,33 @@ export function cacheFilePath(): string {
 
 /**
  * An opaque, deterministic cache-provenance identifier for the Claude profile
- * selected by the current process. The selected path never leaves this helper.
+ * selected by the current process, or for `profile` when one is given. The
+ * selected path never leaves this helper.
  */
-export function claudeCredentialContextId(): string {
-  const { configDir, keychainService } = claudeProfileLocations();
+export function claudeCredentialContextId(
+  profile: ReturnType<typeof claudeProfileLocations> = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, claudeEnvOauthToken() !== undefined);
+}
+
+/**
+ * The identity a profile's own stored credential (file or Keychain item) is
+ * cached under, whether or not `CLAUDE_CODE_OAUTH_TOKEN` happens to be set on
+ * this invocation. A lane that never consults that token, and a stored
+ * credential's own rejection, belong to this identity rather than the
+ * env-marked one {@link claudeCredentialContextId} returns.
+ */
+export function claudeStoredProfileContextId(
+  profile: ReturnType<typeof claudeProfileLocations> = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, false);
+}
+
+function claudeProfileContextId(
+  profile: ReturnType<typeof claudeProfileLocations>,
+  envSelected: boolean,
+): string {
+  const { configDir, keychainService } = profile;
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
   // Version the identity to withhold snapshots an earlier release wrote for
@@ -71,7 +95,6 @@ export function claudeCredentialContextId(): string {
   // appended only when such a token is supplied, so every existing profile
   // keeps the identity it already cached under. It is a presence marker, never
   // any part of the token.
-  const envSelected = claudeEnvOauthToken() !== undefined;
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -127,6 +150,22 @@ export function copilotCliKeychainAccessMarkerPath(
   return join(cacheDirPath(), `copilot-cli-keychain-access-granted-${suffix}`);
 }
 
+/** Non-secret proof scoped to the exact Muse Keychain service and account. */
+export function museKeychainAccessMarkerPath(
+  service: string,
+  account: string,
+): string {
+  const suffix = createHash("sha256")
+    .update(JSON.stringify([service, account]))
+    .digest("hex");
+  return join(cacheDirPath(), `muse-keychain-access-granted-${suffix}`);
+}
+
+/** Path of Muse's key-endpoint attempt ledger, beside the quota cache. */
+export function museKeyReadLedgerPath(): string {
+  return join(cacheDirPath(), "muse-key-reads.json");
+}
+
 function cacheDirPath(): string {
   const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
   return join(base, "quota-axi");
@@ -142,6 +181,20 @@ export function readJsonFile(file: string): unknown | undefined {
 }
 
 export function readJsonFileResult(file: string): JsonFileReadResult {
+  traceInput(file);
+  return readUntracedJsonFileResult(file);
+}
+
+/**
+ * The same read without recording it as an input of the current reading, for
+ * quota-axi's own state such as the cache, which every write changes.
+ */
+export function readUntracedJsonFile(file: string): unknown | undefined {
+  const result = readUntracedJsonFileResult(file);
+  return result.status === "success" ? result.value : undefined;
+}
+
+function readUntracedJsonFileResult(file: string): JsonFileReadResult {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -164,6 +217,7 @@ export async function readBoundedFile(
   path: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  traceInput(path);
   const file = await open(path, "r");
   try {
     const contents = new Uint8Array(maxBytes + 1);

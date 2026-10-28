@@ -2,6 +2,8 @@ import {
   providerPresence,
   type ProviderPresence,
 } from "./lib/source-attempts.js";
+import { collapseHome } from "./lib/fs.js";
+import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
   ProviderId,
@@ -29,11 +31,21 @@ export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
  * JSON keep the canonical direction whatever it is set to.
  */
 export type TuiShow = "remaining" | "used";
+/** A resolved palette: `dark` is Catppuccin Mocha, `light` is Catppuccin Latte. */
+export type TuiTheme = "dark" | "light";
+export type TuiThemeSetting = TuiTheme | "system";
+export const TUI_THEME_SETTINGS: readonly TuiThemeSetting[] = [
+  "light",
+  "dark",
+  "system",
+];
 
 export type TuiOptions = {
   /** Raw terminal width; clamped to [80, 120], defaults to 100. */
   columns?: number;
   colorDepth?: TuiColorDepth;
+  /** Truecolor/256 palette; defaults to `dark`. The ANSI-16 path is theme-free. */
+  theme?: TuiTheme;
   /** Mirrors `--full`: appends account identity and source-attempt footers. */
   full?: boolean;
   /** IANA time zone for header/absolute times; defaults to the system zone. */
@@ -52,6 +64,12 @@ export type TuiOptions = {
   showNotSetUp?: boolean;
   /** Draw percentages and bars as what is left (default) or what is used. */
   show?: TuiShow;
+  /**
+   * Each provider's human lane name from `tui.accountLabels`, aligned with
+   * `response.providers`. The caller resolves it from the account key or the
+   * unredacted `accountLocator`, which a redacted response no longer carries.
+   */
+  accountLabels?: readonly (string | undefined)[];
 };
 
 const CARD_WIDTH = 49;
@@ -59,6 +77,8 @@ const CARD_INTERIOR = CARD_WIDTH - 2;
 const CARD_GUTTER = 2;
 const TWO_COLUMN_MIN = CARD_WIDTH * 2 + CARD_GUTTER;
 const EFFECTIVE_BAR_WIDTH = 41;
+/** Keeps the longest provider id, a label, and the title's right side on one card row. */
+const ACCOUNT_LABEL_WIDTH = 20;
 /** 3 gutter + 8 label + bar + 1 + 4 percent + 2 + 6 reset + 1 = CARD_INTERIOR. */
 const WINDOW_BAR_WIDTH = CARD_INTERIOR - 25;
 const MIN_COLUMNS = 80;
@@ -93,42 +113,102 @@ type StyleSpec = {
   bold?: boolean;
 };
 
-const ACCENTS: Record<StaticProviderId, StyleSpec> = {
-  claude: { rgb: [250, 179, 135], ansi16: "93", bold: true },
-  codex: { rgb: [148, 226, 213], ansi16: "96", bold: true },
-  cursor: { rgb: [137, 180, 250], ansi16: "94", bold: true },
-  copilot: { rgb: [116, 199, 236], ansi16: "94", bold: true },
-  grok: { rgb: [180, 190, 254], ansi16: "95", bold: true },
-  kimi: { rgb: [245, 194, 231], ansi16: "95", bold: true },
-  zai: { rgb: [129, 216, 209], ansi16: "96", bold: true },
-  agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
-  alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
-  "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
-  commandcode: { rgb: [110, 210, 168], ansi16: "92", bold: true },
-  minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
-  mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
-  deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
-  openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
-  elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
-  devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
+type Palette = {
+  accents: Record<StaticProviderId, StyleSpec>;
+  styles: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec>;
 };
 
-const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
-  dim: { rgb: [127, 132, 156], ansi16: "90" },
-  dimmer: { rgb: [88, 91, 112], ansi16: "90" },
-  dimBold: { rgb: [127, 132, 156], ansi16: "90", bold: true },
-  label: { rgb: [166, 173, 200], ansi16: "37" },
-  ok: { rgb: [166, 227, 161], ansi16: "32" },
-  okBold: { rgb: [166, 227, 161], ansi16: "32", bold: true },
-  warn: { rgb: [249, 226, 175], ansi16: "33" },
-  warnBold: { rgb: [249, 226, 175], ansi16: "33", bold: true },
-  crit: { rgb: [243, 139, 168], ansi16: "31" },
-  critBold: { rgb: [243, 139, 168], ansi16: "31", bold: true },
-  marker: { rgb: [137, 220, 235], ansi16: "96" },
-  track: { rgb: [69, 71, 90], ansi16: "90" },
-  border: { rgb: [88, 91, 112], ansi16: "90" },
-  borderDim: { rgb: [49, 50, 68], ansi16: "90" },
+/** Catppuccin Mocha, the dark-background palette. */
+const MOCHA: Palette = {
+  accents: {
+    claude: { rgb: [250, 179, 135], ansi16: "93", bold: true },
+    codex: { rgb: [148, 226, 213], ansi16: "96", bold: true },
+    cursor: { rgb: [137, 180, 250], ansi16: "94", bold: true },
+    copilot: { rgb: [116, 199, 236], ansi16: "94", bold: true },
+    grok: { rgb: [180, 190, 254], ansi16: "95", bold: true },
+    kimi: { rgb: [245, 194, 231], ansi16: "95", bold: true },
+    zai: { rgb: [129, 216, 209], ansi16: "96", bold: true },
+    agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
+    alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
+    "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
+    commandcode: { rgb: [110, 210, 168], ansi16: "92", bold: true },
+    minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
+    mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
+    deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
+    openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
+    elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
+    devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
+    muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
+    higgsfield: { rgb: [255, 176, 122], ansi16: "93", bold: true },
+  },
+  styles: {
+    dim: { rgb: [127, 132, 156], ansi16: "90" },
+    dimmer: { rgb: [88, 91, 112], ansi16: "90" },
+    dimBold: { rgb: [127, 132, 156], ansi16: "90", bold: true },
+    label: { rgb: [166, 173, 200], ansi16: "37" },
+    ok: { rgb: [166, 227, 161], ansi16: "32" },
+    okBold: { rgb: [166, 227, 161], ansi16: "32", bold: true },
+    warn: { rgb: [249, 226, 175], ansi16: "33" },
+    warnBold: { rgb: [249, 226, 175], ansi16: "33", bold: true },
+    crit: { rgb: [243, 139, 168], ansi16: "31" },
+    critBold: { rgb: [243, 139, 168], ansi16: "31", bold: true },
+    marker: { rgb: [137, 220, 235], ansi16: "96" },
+    track: { rgb: [69, 71, 90], ansi16: "90" },
+    border: { rgb: [88, 91, 112], ansi16: "90" },
+    borderDim: { rgb: [49, 50, 68], ansi16: "2;90" },
+  },
 };
+
+/**
+ * Catppuccin Latte, the light-background counterpart. Same style names and
+ * semantic mapping as Mocha, on Latte hues, darkened where stock Latte falls
+ * under 3:1 WCAG contrast against Latte base (#eff1f5) for text or 1.5:1 for
+ * track/border fills, and separated where two accents would share one
+ * 256-color cell. `ansi16` codes are shared: the 16-color path defers to the
+ * terminal's own palette.
+ */
+const LATTE: Palette = {
+  accents: {
+    ...MOCHA.accents,
+    claude: { rgb: [228, 82, 0], ansi16: "93", bold: true },
+    codex: { rgb: [23, 146, 153], ansi16: "96", bold: true },
+    cursor: { rgb: [30, 102, 245], ansi16: "94", bold: true },
+    copilot: { rgb: [16, 128, 150], ansi16: "94", bold: true },
+    grok: { rgb: [92, 106, 240], ansi16: "95", bold: true },
+    kimi: { rgb: [206, 60, 170], ansi16: "95", bold: true },
+    zai: { rgb: [0, 130, 110], ansi16: "96", bold: true },
+    agy: { rgb: [190, 120, 10], ansi16: "93", bold: true },
+    alibaba: { rgb: [215, 70, 70], ansi16: "91", bold: true },
+    "opencode-go": { rgb: [40, 120, 220], ansi16: "96", bold: true },
+    commandcode: { rgb: [52, 150, 30], ansi16: "92", bold: true },
+    minimax: { rgb: [215, 70, 0], ansi16: "93", bold: true },
+    mimo: { rgb: [4, 140, 190], ansi16: "96", bold: true },
+    deepseek: { rgb: [40, 110, 220], ansi16: "94", bold: true },
+    openrouter: { rgb: [136, 57, 239], ansi16: "95", bold: true },
+    elevenlabs: { rgb: [190, 70, 165], ansi16: "95", bold: true },
+    devin: { rgb: [20, 130, 160], ansi16: "96", bold: true },
+    muse: { rgb: [90, 80, 210], ansi16: "94", bold: true },
+    higgsfield: { rgb: [200, 80, 20], ansi16: "93", bold: true },
+  },
+  styles: {
+    dim: { rgb: [124, 127, 147], ansi16: "90" },
+    dimmer: { rgb: [132, 136, 154], ansi16: "90" },
+    dimBold: { rgb: [124, 127, 147], ansi16: "90", bold: true },
+    label: { rgb: [108, 111, 133], ansi16: "37" },
+    ok: { rgb: [52, 150, 30], ansi16: "32" },
+    okBold: { rgb: [52, 150, 30], ansi16: "32", bold: true },
+    warn: { rgb: [188, 108, 0], ansi16: "33" },
+    warnBold: { rgb: [188, 108, 0], ansi16: "33", bold: true },
+    crit: { rgb: [200, 8, 50], ansi16: "31" },
+    critBold: { rgb: [200, 8, 50], ansi16: "31", bold: true },
+    marker: { rgb: [0, 128, 190], ansi16: "96" },
+    track: { rgb: [188, 192, 204], ansi16: "90" },
+    border: { rgb: [172, 176, 190], ansi16: "90" },
+    borderDim: { rgb: [192, 196, 208], ansi16: "2;90" },
+  },
+};
+
+const PALETTES: Record<TuiTheme, Palette> = { dark: MOCHA, light: LATTE };
 
 /**
  * Resolve the color depth for the TUI report from the environment. Honors
@@ -165,18 +245,24 @@ export function renderQuotaTui(
 
   const tiers: Record<ProviderPresence, ProviderQuota[]> = {
     live: [],
+    stale: [],
     attention: [],
     absent: [],
   };
+  const labels = new Map<ProviderQuota, string>();
   response.providers.forEach((provider, index) => {
     tiers[options.presence?.[index] ?? providerPresence(provider)].push(
       provider,
     );
+    const label = fittedAccountLabel(options.accountLabels?.[index]);
+    if (label) labels.set(provider, label);
   });
-  const { live, attention, absent } = tiers;
-  const carded = [...live, ...attention];
+  const { live, stale, attention, absent } = tiers;
+  const carded = [...live, ...stale, ...attention];
+  const labelOf = (provider: ProviderQuota): string | undefined =>
+    labels.get(provider);
   const card = (provider: ProviderQuota): Card =>
-    buildCard(provider, generatedAtMs, show);
+    buildCard(provider, labelOf(provider), generatedAtMs, show);
 
   const lines: Line[] = [];
   lines.push([
@@ -199,7 +285,7 @@ export function renderQuotaTui(
       lines.push([]);
       lines.push(...layoutCards(absent.map(card), twoColumn));
     } else {
-      lines.push(...notSetUpFooter(absent, columns));
+      lines.push(...notSetUpFooter(absent, labelOf, columns));
     }
   }
   if (options.full) {
@@ -211,7 +297,7 @@ export function renderQuotaTui(
     }
   }
   return lines
-    .map((line) => renderLine(trimRight(line), options.colorDepth ?? "none"))
+    .map((line) => renderLine(trimRight(line), renderStyle(options)))
     .join("\n");
 }
 
@@ -223,7 +309,11 @@ export function renderQuotaTui(
  * truncated rather than allowed to run past the terminal, and a line is only
  * wrapped once it carries a name, so the label never stands alone.
  */
-function notSetUpFooter(absent: ProviderQuota[], columns: number): Line[] {
+function notSetUpFooter(
+  absent: ProviderQuota[],
+  labelOf: (provider: ProviderQuota) => string | undefined,
+  columns: number,
+): Line[] {
   const label = "○ not set up  ";
   const indent = 2 + displayWidth(label);
   const width = columns - 2;
@@ -242,10 +332,8 @@ function notSetUpFooter(absent: ProviderQuota[], columns: number): Line[] {
     used += displayWidth(fitted);
   };
   absent.forEach((provider, index) => {
-    const accountKey = configuredAccountKey(provider);
-    const name = accountKey
-      ? `${provider.provider}/${accountKey}`
-      : provider.provider;
+    const lane = labelOf(provider) ?? configuredAccountKey(provider);
+    const name = lane ? `${provider.provider}/${lane}` : provider.provider;
     const separator = index === 0 ? "" : " · ";
     if (
       used > indent &&
@@ -282,7 +370,16 @@ export function renderTuiHintLine(
   const line: Line = [
     { text: `  ${truncate(text, columns - 2)}`, style: "dim" },
   ];
-  return renderLine(trimRight(line), options.colorDepth ?? "none");
+  return renderLine(trimRight(line), renderStyle(options));
+}
+
+type RenderStyle = { depth: TuiColorDepth; theme: TuiTheme };
+
+function renderStyle(options: TuiOptions): RenderStyle {
+  return {
+    depth: options.colorDepth ?? "none",
+    theme: options.theme ?? "dark",
+  };
 }
 
 function resolveColumns(columns: number | undefined): number {
@@ -292,9 +389,11 @@ function resolveColumns(columns: number | undefined): number {
   );
 }
 
-function isLive(provider: ProviderQuota): boolean {
+function hasReading(provider: ProviderQuota): boolean {
   return provider.state.status === "fresh" || provider.state.status === "stale";
 }
+
+type CardBorder = "border" | "borderDim";
 
 /**
  * The fleet summary, never wider than the report. Every tier count is
@@ -310,6 +409,7 @@ function headerText(
   const attention = tiers.attention.length;
   const counts = [
     `${tiers.live.length} live`,
+    `${tiers.stale.length} stale`,
     `${attention} ${attention === 1 ? "needs" : "need"} attention`,
     `${tiers.absent.length} not set up`,
   ];
@@ -326,73 +426,116 @@ type Card = Line[];
 
 function buildCard(
   provider: ProviderQuota,
+  label: string | undefined,
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
-  return isLive(provider)
-    ? buildLiveCard(provider, generatedAtMs, show)
-    : buildFailedCard(provider);
+  const name = label ? `${provider.provider} · ${label}` : provider.provider;
+  return hasReading(provider)
+    ? buildLiveCard(provider, name, generatedAtMs, show)
+    : buildFailedCard(provider, name);
+}
+
+/**
+ * A lane label as the report draws it: terminal-safe, trimmed, and short
+ * enough that a card title still fits. A blank label names nothing.
+ */
+function fittedAccountLabel(label: string | undefined): string | undefined {
+  if (label === undefined) return undefined;
+  return truncate(label.trim(), ACCOUNT_LABEL_WIDTH).trim() || undefined;
+}
+
+/** How old a reused reading is, as the card title's `reused 42s` marker. */
+function reusedAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "reused";
+  return seconds < 120
+    ? `reused ${seconds}s`
+    : `reused ${Math.floor(seconds / 60)}m`;
 }
 
 function buildLiveCard(
   provider: ProviderQuota,
+  name: string,
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
-  const stale = provider.state.stale;
+  const stale = provider.state.status === "stale";
+  const border: CardBorder = stale ? "borderDim" : "border";
   const rightTitle = [
     provider.plan,
     provider.source,
     stale ? "stale" : undefined,
+    provider.state.reused
+      ? reusedAge(provider.state.refreshedAt, generatedAtMs)
+      : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");
   const lines: Line[] = [
     titleLine(
-      {
-        text: ` ● ${provider.provider} `,
-        style: `accent:${provider.provider}`,
-      },
+      stale
+        ? { text: ` ◐ ${name} `, style: "warnBold" }
+        : {
+            text: ` ● ${name} `,
+            style: `accent:${provider.provider}`,
+          },
       rightTitle,
-      "border",
+      border,
     ),
-    ...accountCardLines(provider, "border"),
-    interior([], "border"),
+    ...accountCardLines(provider, border),
+    interior([], border),
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale);
+  const creditsLine = creditsOnlyHeadline(provider, stale, border);
   if (creditsLine) {
     lines.push(...creditsLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
-    lines.push(...windowsOnlyHeadline(stale));
+    lines.push(...windowsOnlyHeadline(stale, border));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale, show));
+    lines.push(...effectiveHeadline(provider, headline, stale, show, border));
   }
 
   if (provider.windows.length > 0) {
-    lines.push(interior([], "border"));
+    lines.push(interior([], border));
     for (const window of provider.windows) {
       lines.push(
         interior(
           windowRow(window, generatedAtMs, provider.windows, show),
-          "border",
+          border,
         ),
       );
     }
   }
 
-  for (const note of cardNotes(provider)) {
+  const jobs = provider.jobs;
+  if (jobs) {
+    lines.push(interior([], border));
+    for (const text of [
+      `   jobs sampled ${jobs.sampled} · completed ${jobs.completed}`,
+      `        failed ${jobs.failed} · other ${jobs.other}`,
+    ]) {
+      lines.push(interior([{ text, style: "dim" }], border));
+    }
+  }
+
+  for (const note of cardNotes(provider, generatedAtMs)) {
     lines.push(
       interior(
         [{ text: `   ${truncate(note, CARD_INTERIOR - 4)}`, style: "dimmer" }],
-        "border",
+        border,
       ),
     );
   }
 
-  lines.push(interior([], "border"));
-  lines.push(bottomLine("border"));
+  lines.push(interior([], border));
+  lines.push(bottomLine(border));
   return lines;
 }
 
@@ -404,8 +547,9 @@ function buildLiveCard(
 function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
-  stale: boolean | undefined,
+  stale: boolean,
   show: TuiShow,
+  border: CardBorder,
 ): Line[] {
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
@@ -451,7 +595,7 @@ function effectiveHeadline(
         ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   lines.push(
@@ -461,7 +605,7 @@ function effectiveHeadline(
         ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH, show),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   return lines;
@@ -475,7 +619,8 @@ function effectiveHeadline(
  */
 function creditsOnlyHeadline(
   provider: ProviderQuota,
-  stale: boolean | undefined,
+  stale: boolean,
+  border: CardBorder,
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
   const credits = provider.credits;
@@ -496,7 +641,7 @@ function creditsOnlyHeadline(
           style: "dimBold",
         },
       ],
-      "border",
+      border,
     ),
   ];
 }
@@ -522,7 +667,7 @@ function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
   return provider.windows.every(({ id }) => unresolved.has(id));
 }
 
-function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
+function windowsOnlyHeadline(stale: boolean, border: CardBorder): Line[] {
   const left: Line = [
     {
       text: stale ? "stale · per-window usage" : "per-window usage",
@@ -539,18 +684,18 @@ function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
         ...padBetween(left, right, CARD_INTERIOR - 4),
         { text: " " },
       ],
-      "border",
+      border,
     ),
   ];
 }
 
-function buildFailedCard(provider: ProviderQuota): Card {
+function buildFailedCard(provider: ProviderQuota, name: string): Card {
   const status = provider.state.status;
   const rightTitle =
     status === "auth_required" ? "signed out" : humanize(status);
   const lines: Line[] = [
     titleLine(
-      { text: ` ○ ${provider.provider} `, style: "dimBold" },
+      { text: ` ○ ${name} `, style: "dimBold" },
       rightTitle,
       "borderDim",
     ),
@@ -803,8 +948,32 @@ function runwayVerdict(headline: EffectiveAvailability | undefined): Line {
   return [{ text, style: "warnBold" }];
 }
 
-function cardNotes(provider: ProviderQuota): string[] {
+function staleAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${formatCountdown(seconds)} ago`;
+}
+
+function cardNotes(provider: ProviderQuota, generatedAtMs: number): string[] {
   const notes: string[] = [];
+  if (provider.state.status === "stale") {
+    notes.push(
+      `last refreshed ${staleAge(provider.state.refreshedAt, generatedAtMs)}`,
+    );
+    if (provider.state.error) {
+      const prefix = isUsageFetchFailure(provider) ? "fetch failed " : "";
+      notes.push(`${prefix}${humanize(provider.state.error)}`);
+    }
+    if (provider.state.reason) {
+      notes.push(`reason ${humanize(provider.state.reason)}`);
+    }
+  }
   if (provider.state.retryAfter) {
     notes.push(`retry after ${provider.state.retryAfter}`);
   }
@@ -963,6 +1132,8 @@ function fullFooterLines(provider: ProviderQuota, width: number): string[] {
     ...(accountKey ? [accountKey] : []),
   ];
   const protectedAccountParts = new Set([0]);
+  if (provider.accountLocator)
+    accountParts.push(collapseHome(provider.accountLocator.path));
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {
     accountParts.push(provider.account.organization);
@@ -1313,24 +1484,29 @@ function trimRight(line: Line): Line {
   return out;
 }
 
-function renderLine(line: Line, depth: TuiColorDepth): string {
+function renderLine(line: Line, { depth, theme }: RenderStyle): string {
   if (depth === "none") {
     return line.map((segment) => segment.text).join("");
   }
   return line
     .map((segment) => {
       if (segment.style === undefined) return segment.text;
-      const sgr = styleSgr(segment.style, depth);
+      const sgr = styleSgr(segment.style, depth, theme);
       return sgr === "" ? segment.text : `\x1b[${sgr}m${segment.text}\x1b[0m`;
     })
     .join("");
 }
 
-function styleSgr(style: StyleName, depth: TuiColorDepth): string {
+function styleSgr(
+  style: StyleName,
+  depth: TuiColorDepth,
+  theme: TuiTheme,
+): string {
+  const palette = PALETTES[theme];
   const spec = style.startsWith("accent:")
-    ? (ACCENTS[style.slice("accent:".length) as StaticProviderId] ??
-      STYLES.label)
-    : STYLES[style as Exclude<StyleName, `accent:${ProviderId}`>];
+    ? (palette.accents[style.slice("accent:".length) as StaticProviderId] ??
+      palette.styles.label)
+    : palette.styles[style as Exclude<StyleName, `accent:${ProviderId}`>];
   const codes: string[] = [];
   if (spec.bold) codes.push("1");
   if (depth === "truecolor") {
