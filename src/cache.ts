@@ -304,6 +304,8 @@ type CachedProvider = {
  * `authStatus` or superseded sources forward as if they were current.
  */
 type ReuseStamp = {
+  /** Version 2 requires every consulted input to permit fresh reuse. */
+  version?: 2;
   /** {@link reuseContextId} of the process that took the reading. */
   context: string;
   /** The local files the reading was derived from, and their state then. */
@@ -351,9 +353,10 @@ export function stampReadingInputs(
 /**
  * The last successful reading of `provider`, when it was taken by a process
  * making the same credential selection as this one, no local file it was
- * derived from has changed since, every lane it reported was cached, and it is
- * younger than `maxAgeSeconds`. Returns `undefined`
- * whenever any of that is not established, so the caller reads the vendor.
+ * derived from has changed since, every consulted input permits fresh reuse,
+ * every lane it reported was cached, and it is younger than `maxAgeSeconds`.
+ * Returns `undefined` whenever any of that is not established, so the caller
+ * reads the vendor.
  */
 export function readReusableProviders(
   provider: ProviderId,
@@ -365,7 +368,8 @@ export function readReusableProviders(
   const records = readCacheProviders().filter(
     (record) =>
       record.snapshot.provider === provider &&
-      record.reuse?.context === contextId,
+      record.reuse?.version === 2 &&
+      record.reuse.context === contextId,
   );
   const readingAt = records
     .map((record) => record.reuse?.readingAt ?? "")
@@ -718,8 +722,9 @@ function withCacheWriteLock(fn: () => void): void {
 
 /**
  * Fresh-reuse stamps for the providers whose every lane in this report is
- * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
- * so the next read asks the vendor again instead of serving part of a report.
+ * cacheable and whose consulted inputs permit fresh reuse. A provider with
+ * one failed, uncacheable, or empty lane gets none, so the next read asks the
+ * vendor again instead of serving part of a report.
  */
 function reuseStampsFor(
   providers: ProviderQuota[],
@@ -733,6 +738,7 @@ function reuseStampsFor(
     const inputs = (lanes[0] as TracedQuota)[READING_INPUTS];
     if (
       !inputs ||
+      inputs.reusable === false ||
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
@@ -744,6 +750,7 @@ function reuseStampsFor(
     context ??= reuseContextId();
     lanes.forEach((provider, lane) => {
       stamps.set(provider, {
+        version: 2,
         context: context as string,
         inputs: inputs.paths,
         inputsDigest: inputs.digest,
@@ -1008,6 +1015,7 @@ function normalizeReuseStamp(raw: unknown): ReuseStamp | undefined {
   )
     return undefined;
   const stamp: ReuseStamp = {
+    ...(data.version === 2 ? { version: 2 } : {}),
     context,
     inputs,
     inputsDigest: digest,

@@ -13,12 +13,56 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { quotaCommand } from "../src/commands.js";
-import type { QuotaAxiResponse } from "../src/types.js";
+import {
+  inputsDigest,
+  traceInput,
+  withInputTrace,
+} from "../src/lib/input-trace.js";
+import { execFileText } from "../src/lib/process.js";
+import {
+  readCachedProvider,
+  readReusableProviders,
+  stampReadingInputs,
+  writeCachedProviders,
+} from "../src/cache.js";
+import { reuseContextId } from "../src/lib/reuse-context.js";
+import { claudeKeychainService } from "../src/providers/claude.js";
+import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
+
+const processOutput = vi.hoisted(() =>
+  vi.fn<(command: string, args: string[]) => string>(),
+);
+
+// Exercise the real process wrapper, but never execute security or a vendor CLI.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(
+      (
+        command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        try {
+          callback(null, processOutput(command, args), "");
+        } catch (error) {
+          callback(error as Error, "", "");
+        }
+        return {};
+      },
+    ),
+  };
+});
 
 // No installed Codex CLI may answer for the synthetic Codex logins
 vi.mock("../src/lib/process.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/process.js")>();
-  return { ...actual, findCommandPath: vi.fn(async () => undefined) };
+  return {
+    ...actual,
+    findCommandPath: vi.fn(async () => undefined),
+  };
 });
 
 /**
@@ -49,6 +93,7 @@ const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const saved = Object.fromEntries(
   [
     "HOME",
+    "USER",
     "USERPROFILE",
     "XDG_CACHE_HOME",
     "CLAUDE_CONFIG_DIR",
@@ -72,6 +117,7 @@ beforeEach(() => {
   });
   root = mkdtempSync(join(tmpdir(), "quota-axi-fresh-reuse-"));
   process.env.HOME = root;
+  process.env.USER = "synthetic-user";
   process.env.USERPROFILE = root;
   process.env.XDG_CACHE_HOME = join(root, "cache");
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -79,6 +125,9 @@ beforeEach(() => {
   // Reuse is opt-in; these tests enable it the way a host does
   process.env.QUOTA_AXI_MAX_AGE = "90s";
   useProfile("a");
+  processOutput.mockReset().mockImplementation(() => {
+    throw new Error("unexpected process");
+  });
   usageCalls = 0;
   locksDuringUsage = [];
   usagePercent = 30;
@@ -247,7 +296,184 @@ describe("single-flight lock", () => {
   });
 });
 
+/** A Keychain-only login. All process and HTTP boundaries are synthetic. */
+function mockKeychainLogin(metadataReadable = true): { account: string } {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: "darwin",
+  });
+  const credentialFile = join(
+    process.env.CLAUDE_CONFIG_DIR!,
+    ".credentials.json",
+  );
+  rmSync(credentialFile);
+  const login = { account: "account-a" };
+  processOutput.mockImplementation((command, args) => {
+    expect(command).toBe("security");
+    if (
+      !metadataReadable &&
+      ["list-keychains", "dump-keychain"].includes(args[0]!)
+    )
+      throw new Error("metadata unavailable");
+    if (args[0] === "list-keychains") return '"/synthetic/login.keychain-db"';
+    if (args[0] === "dump-keychain")
+      return `keychain: "/synthetic/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="synthetic-user"
+    "svce"<blob>="${claudeKeychainService()}"
+    "cdat"<timedate>="20260922010000Z"
+    "mdat"<timedate>="20260922010000Z"
+`;
+    expect(args[0]).toBe("find-generic-password");
+    return args.includes("-w")
+      ? JSON.stringify({
+          claudeAiOauth: {
+            accessToken: `synthetic-${login.account}`,
+            expiresAt: "2035-01-01T00:00:00Z",
+          },
+        })
+      : "present";
+  });
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const selected =
+      new Headers(init?.headers).get("authorization") ===
+      "Bearer synthetic-account-a"
+        ? "account-a"
+        : "account-b";
+    if (String(input).endsWith("/api/oauth/profile"))
+      return new Response(JSON.stringify({ account: { uuid: selected } }));
+    expect(String(input)).toContain("/api/oauth/usage");
+    usageCalls++;
+    const payload = structuredClone(USAGE);
+    payload.limits[0]!.percent = selected === "account-a" ? 30 : 80;
+    return new Response(JSON.stringify(payload));
+  });
+  return login;
+}
+
 describe("fresh reuse", () => {
+  it.each(["security", "/usr/bin/security"])(
+    "keeps %s readings available only for stale fallback across providers",
+    async (command) => {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: "darwin",
+      });
+      processOutput.mockReturnValue("synthetic metadata");
+      const laterFile = join(root, "later-file");
+      const { inputs } = await withInputTrace(async () => {
+        await execFileText(
+          command,
+          ["find-generic-password", "-s", "synthetic"],
+          100,
+        );
+        traceInput(laterFile);
+      });
+      const snapshot: ProviderQuota = {
+        provider: "alibaba",
+        label: "Alibaba",
+        source: "cli",
+        windows: [
+          {
+            id: "session",
+            label: "session",
+            kind: "session",
+            percentRemaining: 70,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: START,
+          sourcesTried: ["cli"],
+        },
+      };
+      stampReadingInputs(snapshot, inputs);
+      writeCachedProviders([snapshot], START);
+      expect(readCachedProvider("alibaba")?.windows[0]?.percentRemaining).toBe(
+        70,
+      );
+      expect(readReusableProviders("alibaba", 3600)).toBeUndefined();
+
+      // A separate file-backed reading remains eligible; the veto is trace-local.
+      const separate = await withInputTrace(async () => {
+        traceInput(laterFile);
+      });
+      stampReadingInputs(snapshot, separate.inputs);
+      writeCachedProviders([snapshot], START);
+      expect(readReusableProviders("alibaba", 3600)?.[0]?.state.reused).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "does not reuse a Keychain reading when metadata is readable: %s",
+    async (metadataReadable) => {
+      mockKeychainLogin(metadataReadable);
+      for (let read = 0; read < 2; read++) {
+        const reading = await readJson(
+          "--max-age",
+          "1h",
+          "--allow-keychain-prompt",
+        );
+        expect(reading.windows[0]?.percentRemaining).toBe(70);
+        expect(reading.state.reused).toBeUndefined();
+        advance(10);
+      }
+      expect(usageCalls).toBe(2);
+      const cache = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+        providers: { reuse?: unknown }[];
+      };
+      expect(cache.providers).toHaveLength(1);
+      expect(cache.providers[0]?.reuse).toBeUndefined();
+    },
+  );
+
+  it("withholds legacy reuse stamps while retaining their stale snapshot", async () => {
+    const login = mockKeychainLogin();
+    await readJson("--max-age", "1h", "--allow-keychain-prompt");
+    const cache = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: { reuse?: unknown }[];
+    };
+    const inputs = [join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json")];
+    cache.providers[0]!.reuse = {
+      context: reuseContextId(),
+      inputs,
+      inputsDigest: inputsDigest(inputs),
+      readingAt: START,
+      lanes: 1,
+      lane: 0,
+    };
+    writeFileSync(cacheFilePath(), JSON.stringify(cache));
+    login.account = "account-b";
+    advance(10);
+    const reading = await readJson(
+      "--max-age",
+      "1h",
+      "--allow-keychain-prompt",
+    );
+    expect(reading.windows[0]?.percentRemaining).toBe(20);
+    expect(reading.state.reused).toBeUndefined();
+    expect(usageCalls).toBe(2);
+  });
+
+  it("reads the new Keychain login in the same profile with --max-age 1h", async () => {
+    const login = mockKeychainLogin();
+    const first = await readJson("--max-age", "1h", "--allow-keychain-prompt");
+    expect(first.windows[0]?.percentRemaining).toBe(70);
+    login.account = "account-b";
+    advance(10);
+    const second = await readJson("--max-age", "1h", "--allow-keychain-prompt");
+    expect(
+      existsSync(join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json")),
+    ).toBe(false);
+    expect(second.windows[0]?.percentRemaining).toBe(20);
+    expect(second.state.reused).toBeUndefined();
+    expect(usageCalls).toBe(2);
+  });
+
   it("answers a burst of reads with one vendor call, where --max-age 0 makes one per read", async () => {
     for (let read = 0; read < 8; read++) {
       await readJson();

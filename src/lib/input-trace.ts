@@ -8,18 +8,22 @@ import { statSync } from "node:fs";
  * rewrites a credential store or a configuration that now names another
  * deployment is read again instead of answering with the previous account.
  *
- * Only files quota-axi opens itself are traced. A store read through a vendor
- * tool (the macOS Keychain, Cursor's SQLite database, a vendor CLI) is
- * identified by the environment selection that names it, exactly as the
- * stale-cache credential context identifies it.
+ * A source whose changes cannot be checked without reading a credential marks
+ * the trace unverifiable. Its quota may still be cached for stale fallback,
+ * but file metadata and environment selection cannot vouch for fresh reuse.
  */
-const trace = new AsyncLocalStorage<Map<string, string>>();
+const trace = new AsyncLocalStorage<{
+  states: Map<string, string>;
+  reusable: boolean;
+}>();
 
 export type TracedInputs = {
   /** Every traced path, sorted. */
   paths: string[];
   /** {@link inputsDigest} of those paths as they were when last read. */
   digest: string;
+  /** A consulted source cannot be checked safely for changes. */
+  reusable?: false;
 };
 
 /**
@@ -28,7 +32,16 @@ export type TracedInputs = {
  * reading is still in flight can never be vouched for by that reading.
  */
 export function traceInput(path: string): void {
-  trace.getStore()?.set(path, inputState(path));
+  trace.getStore()?.states.set(path, inputState(path));
+}
+
+/**
+ * A consulted input has no safely observable change signal. The flag is sticky
+ * across sibling sources and lanes: a later file read cannot vouch for it.
+ */
+export function traceUnverifiableInput(): void {
+  const current = trace.getStore();
+  if (current) current.reusable = false;
 }
 
 /** Run `read` and return what it produced plus every input it traced. */
@@ -36,13 +49,15 @@ export async function withInputTrace<T>(
   read: () => Promise<T>,
 ): Promise<{ value: T; inputs: TracedInputs }> {
   const states = new Map<string, string>();
-  const value = await trace.run(states, read);
+  const current = { states, reusable: true };
+  const value = await trace.run(current, read);
   const paths = [...states.keys()].sort();
   return {
     value,
     inputs: {
       paths,
       digest: digestStates(paths.map((path) => states.get(path) as string)),
+      ...(!current.reusable ? { reusable: false as const } : {}),
     },
   };
 }
