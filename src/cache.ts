@@ -353,9 +353,10 @@ export function stampReadingInputs(
 /**
  * The last successful reading of `provider`, when it was taken by a process
  * making the same credential selection as this one, no local file it was
- * derived from has changed since, every lane it reported was cached, and it is
- * younger than `maxAgeSeconds`. Returns `undefined`
- * whenever any of that is not established, so the caller reads the vendor.
+ * derived from has changed since, every consulted input permits fresh reuse,
+ * every lane it reported was cached, and it is younger than `maxAgeSeconds`.
+ * Returns `undefined` whenever any of that is not established, so the caller
+ * reads the vendor.
  */
 export function readReusableProviders(
   provider: ProviderId,
@@ -721,8 +722,9 @@ function withCacheWriteLock(fn: () => void): void {
 
 /**
  * Fresh-reuse stamps for the providers whose every lane in this report is
- * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
- * so the next read asks the vendor again instead of serving part of a report.
+ * cacheable and whose consulted inputs permit fresh reuse. A provider with
+ * one failed, uncacheable, or empty lane gets none, so the next read asks the
+ * vendor again instead of serving part of a report.
  */
 function reuseStampsFor(
   providers: ProviderQuota[],

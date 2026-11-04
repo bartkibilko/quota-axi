@@ -448,10 +448,10 @@ For custom HTTP providers, see their [live-read rule](#custom-http-spend-provide
 With reuse enabled, a live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so fresh reuse never repeats its own previous frame unless `--max-age` is passed explicitly.
 Pressing `r` bypasses fresh reuse, because it is an operator asking for a new reading now. Both refresh paths retain the provider-specific read bounds above.
 
-With reuse enabled, processes that miss the cache together make one vendor read per provider and credential selection.
+With reuse enabled, processes that miss the cache together share one vendor read per provider and credential selection when its result permits fresh reuse.
 The first creates a lock file under the cache directory, reads the vendor, and caches that provider's reading before releasing it; the others poll the cache and are answered by that reading through the same checks as any reuse.
 A waiter gives up after 30 seconds and reads the vendor itself, and a lock whose holder has exited, or that is older than two minutes, is taken over, so a crashed or wedged holder never blocks a read.
-If the holder's reading is not reusable (it failed, is stale, has no windows, or is a reading the cache excludes), nothing is cached and the waiters read the vendor together rather than one at a time, so a burst takes about one vendor round trip beyond the holder's, not one per waiter.
+If the holder's reading does not satisfy the reuse checks above, no reusable reading is cached and the waiters read the vendor together rather than one at a time, so a burst takes about one vendor round trip beyond the holder's, not one per waiter. A snapshot may still be cached for stale fallback under the [cache rules](#cache).
 Leaders of different providers merge their readings into the one cache file under a short lock of their own, so one leader's write never drops another's reading and leaves its waiters to read the vendor; if that lock is not free within five seconds the write goes ahead unlocked.
 The lock only saves vendor calls: a lost race costs an extra read, never a wrong one.
 

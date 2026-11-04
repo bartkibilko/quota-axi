@@ -495,9 +495,9 @@ export async function fetchQuota(
 /**
  * One provider's readings when fresh reuse may answer. Processes that miss
  * the cache together take turns: the lock holder reads the vendor and caches
- * that provider's readings before releasing, so the others are answered by
- * the cache instead of each asking the vendor. `markCached` records that
- * this provider's readings are already in the cache.
+ * that provider's readings before releasing, so the others can reuse an
+ * eligible reading instead of each asking the vendor. `markCached` records
+ * that this provider's readings are already in the cache.
  */
 async function readProvider(
   provider: ProviderId,
